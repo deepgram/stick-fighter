@@ -1,0 +1,217 @@
+import { InputManager, KeyboardAdapter, P1_KEYBOARD_MAP, P2_KEYBOARD_MAP } from './input.js';
+import { Game } from './game.js';
+import { SFX } from './sfx.js';
+import { INPUT_MODES, LLM_PROVIDERS, updateModeSelection, getPlayerLabel } from './ui.js';
+import { VoiceAdapter } from './voice.js';
+import { PhoneAdapter } from './phone.js';
+import { SimulatedAdapter } from './simulated.js';
+import { LLMAdapter } from './llm.js';
+
+const canvas = document.getElementById('game');
+const onboarding = document.getElementById('onboarding');
+
+// Hi-DPI setup
+const dpr = window.devicePixelRatio || 1;
+function resize() {
+  if (canvas.classList.contains('active')) {
+    canvas.width = canvas.offsetWidth * dpr;
+    canvas.height = canvas.offsetHeight * dpr;
+  }
+}
+window.addEventListener('resize', resize);
+
+// ─────────────────────────────────────────────
+// Mode selection — persisted in localStorage
+// ─────────────────────────────────────────────
+let p1ModeIdx = parseInt(localStorage.getItem('sf_p1Mode') || '0', 10);
+let p2ModeIdx = parseInt(localStorage.getItem('sf_p2Mode') || '0', 10);
+let p1ProviderIdx = parseInt(localStorage.getItem('sf_p1Provider') || '0', 10);
+let p2ProviderIdx = parseInt(localStorage.getItem('sf_p2Provider') || '0', 10);
+p1ModeIdx = Math.max(0, Math.min(p1ModeIdx, INPUT_MODES.length - 1));
+p2ModeIdx = Math.max(0, Math.min(p2ModeIdx, INPUT_MODES.length - 1));
+p1ProviderIdx = Math.max(0, Math.min(p1ProviderIdx, LLM_PROVIDERS.length - 1));
+p2ProviderIdx = Math.max(0, Math.min(p2ProviderIdx, LLM_PROVIDERS.length - 1));
+// Ensure P2 doesn't land on a P1-only mode
+if (INPUT_MODES[p2ModeIdx].p1Only) p2ModeIdx = 0;
+
+function saveModes() {
+  localStorage.setItem('sf_p1Mode', p1ModeIdx.toString());
+  localStorage.setItem('sf_p2Mode', p2ModeIdx.toString());
+  localStorage.setItem('sf_p1Provider', p1ProviderIdx.toString());
+  localStorage.setItem('sf_p2Provider', p2ProviderIdx.toString());
+}
+
+updateModeSelection(1, p1ModeIdx, p1ProviderIdx);
+updateModeSelection(2, p2ModeIdx, p2ProviderIdx);
+
+// ─────────────────────────────────────────────
+// App state
+// ─────────────────────────────────────────────
+let state = 'onboarding';
+let game = null;
+let p1Input = null;
+let p2Input = null;
+const sfx = new SFX();
+// Track active adapters for cleanup
+let activeAdapters = [];
+
+/** Create an InputManager with the right adapter for a mode */
+function createInput(playerNum, modeIdx, providerIdx) {
+  const manager = new InputManager();
+  const mode = INPUT_MODES[modeIdx].id;
+
+  if (mode === 'controller') {
+    const keyMap = playerNum === 1 ? P1_KEYBOARD_MAP : P2_KEYBOARD_MAP;
+    const adapter = new KeyboardAdapter(keyMap);
+    manager.addAdapter(adapter);
+    activeAdapters.push(adapter);
+  } else if (mode === 'voice') {
+    const adapter = new VoiceAdapter(playerNum);
+    manager.addAdapter(adapter);
+    activeAdapters.push(adapter);
+  } else if (mode === 'phone') {
+    const adapter = new PhoneAdapter(playerNum);
+    manager.addAdapter(adapter);
+    activeAdapters.push(adapter);
+  } else if (mode === 'simulated') {
+    const adapter = new SimulatedAdapter(playerNum);
+    manager.addAdapter(adapter);
+    activeAdapters.push(adapter);
+  } else if (mode === 'llm') {
+    const provider = LLM_PROVIDERS[providerIdx]?.id || 'anthropic';
+    const adapter = new LLMAdapter(playerNum, provider);
+    manager.addAdapter(adapter);
+    activeAdapters.push(adapter);
+  }
+
+  return manager;
+}
+
+/** Clean up all active adapters */
+async function cleanupAdapters() {
+  for (const adapter of activeAdapters) {
+    if (adapter.detach) await adapter.detach();
+  }
+  activeAdapters = [];
+}
+
+function showOnboarding() {
+  state = 'onboarding';
+  if (game) { game.running = false; game = null; }
+  cleanupAdapters();
+  p1Input = null;
+  p2Input = null;
+  onboarding.classList.remove('hidden');
+  canvas.classList.remove('active');
+}
+
+async function startFight() {
+  state = 'fighting';
+  onboarding.classList.add('hidden');
+  canvas.classList.add('active');
+  resize();
+
+  // Create inputs based on mode selection
+  p1Input = createInput(1, p1ModeIdx, p1ProviderIdx);
+  p2Input = createInput(2, p2ModeIdx, p2ProviderIdx);
+
+  // Preload SFX + wait for all adapters to be ready (mic, WS, etc.)
+  const readyPromises = [sfx.preload()];
+  for (const adapter of activeAdapters) {
+    if (adapter.waitUntilReady) readyPromises.push(adapter.waitUntilReady());
+  }
+
+  // Start the game loop (renders stage + fighters while waiting)
+  const p1Label = getPlayerLabel(p1ModeIdx, p1ProviderIdx);
+  const p2Label = getPlayerLabel(p2ModeIdx, p2ProviderIdx);
+  game = new Game(canvas, p1Input, p2Input, sfx, { p1Label, p2Label });
+  game.start();
+
+  // Wire up adapters with game reference
+  for (const adapter of activeAdapters) {
+    if (adapter.setGameRef) adapter.setGameRef(game);
+  }
+
+  window._game = game;
+
+  // Wait for all providers, then show "FIGHT!"
+  await Promise.all(readyPromises);
+  game.showFightAlert();
+}
+
+// ─────────────────────────────────────────────
+// Click handlers for mode pills
+// ─────────────────────────────────────────────
+document.querySelectorAll('.mode-pills').forEach(container => {
+  const player = parseInt(container.dataset.player, 10);
+  container.addEventListener('click', e => {
+    const pill = e.target.closest('.mode-pill');
+    if (!pill) return;
+    const idx = parseInt(pill.dataset.mode, 10);
+    // Skip p1Only modes for other players
+    if (INPUT_MODES[idx].p1Only && player !== 1) return;
+    if (player === 1) {
+      p1ModeIdx = idx;
+      updateModeSelection(1, p1ModeIdx, p1ProviderIdx);
+    } else {
+      p2ModeIdx = idx;
+      updateModeSelection(2, p2ModeIdx, p2ProviderIdx);
+    }
+    saveModes();
+  });
+});
+
+// ─────────────────────────────────────────────
+// Click handlers for LLM provider pills (delegated)
+// ─────────────────────────────────────────────
+onboarding.addEventListener('click', e => {
+  const pill = e.target.closest('.provider-pill');
+  if (!pill) return;
+  const container = pill.closest('.provider-pills');
+  if (!container) return;
+  const player = parseInt(container.dataset.player, 10);
+  const idx = parseInt(pill.dataset.provider, 10);
+  if (player === 1) {
+    p1ProviderIdx = idx;
+    updateModeSelection(1, p1ModeIdx, p1ProviderIdx);
+  } else {
+    p2ProviderIdx = idx;
+    updateModeSelection(2, p2ModeIdx, p2ProviderIdx);
+  }
+  saveModes();
+});
+
+// ─────────────────────────────────────────────
+// Keyboard handlers
+// ─────────────────────────────────────────────
+window.addEventListener('keydown', e => {
+  const modeCount = INPUT_MODES.length;
+
+  if (state === 'onboarding') {
+    if (e.code === 'KeyA') {
+      p1ModeIdx = (p1ModeIdx - 1 + modeCount) % modeCount;
+      updateModeSelection(1, p1ModeIdx, p1ProviderIdx);
+      saveModes();
+    } else if (e.code === 'KeyD') {
+      p1ModeIdx = (p1ModeIdx + 1) % modeCount;
+      updateModeSelection(1, p1ModeIdx, p1ProviderIdx);
+      saveModes();
+    } else if (e.code === 'ArrowLeft') {
+      do { p2ModeIdx = (p2ModeIdx - 1 + modeCount) % modeCount; } while (INPUT_MODES[p2ModeIdx].p1Only);
+      updateModeSelection(2, p2ModeIdx, p2ProviderIdx);
+      saveModes();
+      e.preventDefault();
+    } else if (e.code === 'ArrowRight') {
+      do { p2ModeIdx = (p2ModeIdx + 1) % modeCount; } while (INPUT_MODES[p2ModeIdx].p1Only);
+      updateModeSelection(2, p2ModeIdx, p2ProviderIdx);
+      saveModes();
+      e.preventDefault();
+    } else if (e.code === 'Enter') {
+      startFight();
+    }
+  } else if (state === 'fighting') {
+    if (e.code === 'Enter' && game && game.roundOver) {
+      showOnboarding();
+    }
+  }
+});
