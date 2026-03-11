@@ -4,7 +4,7 @@
 #
 
 app = 'stick-fighter'
-primary_region = 'ord'
+primary_region = 'iad'
 
 [build]
 
@@ -23,7 +23,6 @@ primary_region = 'ord'
     timeout = '2s'
 
 [[vm]]
-  memory = '1gb'
-  cpu_kind = 'shared'
+  cpu_kind = 'performance'
   cpus = 1
-  memory_mb = 1024
+  memory_mb = 2048
