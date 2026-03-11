@@ -1,0 +1,16 @@
+[project]
+name = "stick-fighter"
+version = "0.1.0"
+description = "Deepgram-branded Street Fighter clone"
+requires-python = ">=3.11"
+dependencies = [
+    "litestar[standard]>=2.15",
+    "uvicorn[standard]>=0.34",
+    "websockets>=15.0",
+    "httpx>=0.28",
+    "python-dotenv>=1.0",
+    "deepgram-sdk>=6.0.1",
+]
+
+[project.scripts]
+dev = "uvicorn server:app --reload --port 3000"
