@@ -741,6 +741,40 @@
     .lb-viewer-row .lb-rating { font-size: 14px; }
     .lb-viewer-row .lb-record { color: var(--dg-slate); }
 
+    /* ── Matchmaking screen ── */
+    .matchmaking-screen {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 20px;
+      padding: 20px;
+    }
+    .matchmaking-screen.hidden { display: none; }
+
+    .mm-searching-text {
+      font-size: 16px;
+      color: var(--dg-primary);
+      font-weight: bold;
+      animation: pulse 2s ease-in-out infinite;
+    }
+    .mm-wait-info {
+      font-size: 12px;
+      color: var(--dg-pebble);
+      text-align: center;
+    }
+    .mm-actions {
+      display: flex;
+      gap: 16px;
+      align-items: center;
+    }
+    .mm-warn {
+      font-size: 11px;
+      color: var(--dg-danger);
+      margin-top: 4px;
+    }
+
     .lb-link {
       font-family: monospace;
       font-size: 11px;
@@ -854,6 +888,40 @@
     <button class="join-btn" id="btn-ctrl-confirm">CONFIRM</button>
     <p class="room-ctrl-status" id="room-ctrl-status"></p>
     <button class="back-btn" id="btn-ctrl-back">← LEAVE ROOM</button>
+  </div>
+
+  <!-- Matchmaking screen -->
+  <div class="matchmaking-screen hidden" id="matchmaking">
+    <h2>MATCHMAKING</h2>
+
+    <!-- Controller selection (before searching) -->
+    <div id="mm-select">
+      <p class="join-hint">Choose your controller and search for an opponent</p>
+      <div class="player-card p1" id="mm-ctrl-card">
+        <h3>YOUR FIGHTER</h3>
+        <div class="mode-pills" id="mm-ctrl-pills">
+          <button class="mode-pill selected" data-mode="0">Keys</button>
+          <button class="mode-pill" data-mode="1">Voice</button>
+          <button class="mode-pill" data-mode="2">Phone</button>
+          <button class="mode-pill" data-mode="3">Sim</button>
+          <button class="mode-pill" data-mode="4">LLM</button>
+        </div>
+        <div class="controls-info" id="mm-ctrl-info"></div>
+      </div>
+      <button class="join-btn" id="btn-mm-search">SEARCH FOR OPPONENT</button>
+    </div>
+
+    <!-- Searching state (shown after joining queue) -->
+    <div id="mm-searching" class="hidden">
+      <p class="mm-searching-text" id="mm-searching-text">Searching for opponent...</p>
+      <p class="mm-wait-info" id="mm-wait-info"></p>
+      <div class="mm-actions">
+        <button class="join-btn" id="btn-mm-cancel">CANCEL SEARCH</button>
+        <button class="back-btn" id="btn-mm-play-wait">Play while you wait &rarr;</button>
+      </div>
+    </div>
+
+    <button class="back-btn" id="btn-mm-back">&larr; BACK</button>
   </div>
 
   <!-- Onboarding screen (single-player fighter selection) -->

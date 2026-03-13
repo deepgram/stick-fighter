@@ -34,6 +34,7 @@ from signaling import SignalingManager, ICE_SERVERS
 from auth import OIDCConfig, exchange_code, refresh_tokens, fetch_userinfo, extract_user_from_id_token
 from elo import EloManager, controller_to_category
 from room_cleanup import RoomCleanupTask
+from matchmaking import MatchmakingTask
 
 # ─────────────────────────────────────────────
 # Config
@@ -51,12 +52,13 @@ signaling_manager: SignalingManager | None = None
 oidc_config: OIDCConfig | None = None
 elo_manager: EloManager | None = None
 cleanup_task: RoomCleanupTask | None = None
+matchmaking_task: MatchmakingTask | None = None
 
 
 @asynccontextmanager
 async def lifespan(app: Litestar) -> AsyncGenerator[None, None]:
     """Start/stop the Redis connection pool and game loop manager."""
-    global room_manager, game_loop_manager, signaling_manager, oidc_config, elo_manager, cleanup_task  # noqa: PLW0603
+    global room_manager, game_loop_manager, signaling_manager, oidc_config, elo_manager, cleanup_task, matchmaking_task  # noqa: PLW0603
     redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379")
     pool = aioredis.from_url(redis_url, decode_responses=True)
     room_manager = RoomManager(pool)
@@ -66,6 +68,8 @@ async def lifespan(app: Litestar) -> AsyncGenerator[None, None]:
     elo_manager = EloManager(pool)
     cleanup_task = RoomCleanupTask(room_manager, game_loop_manager, signaling_manager)
     cleanup_task.start()
+    matchmaking_task = MatchmakingTask(room_manager, elo_manager)
+    matchmaking_task.start()
     if oidc_config.configured:
         print(f"[auth] OIDC configured: issuer={oidc_config.issuer}")
     else:
@@ -74,6 +78,9 @@ async def lifespan(app: Litestar) -> AsyncGenerator[None, None]:
     try:
         yield
     finally:
+        if matchmaking_task is not None:
+            await matchmaking_task.stop()
+        matchmaking_task = None
         if cleanup_task is not None:
             await cleanup_task.stop()
         cleanup_task = None
@@ -1395,6 +1402,89 @@ async def auth_me(request: Request) -> dict[str, Any]:
 # ─────────────────────────────────────────────
 
 
+# ─────────────────────────────────────────────
+# Matchmaking
+# ─────────────────────────────────────────────
+
+
+@post("/api/matchmaking/join")
+async def matchmaking_join_endpoint(data: dict[str, Any]) -> dict[str, Any]:
+    """Join the ELO matchmaking queue.
+
+    Body: { controller, userId?, name? }
+    Returns: { playerId, category, elo, queueSize }
+    """
+    if room_manager is None or matchmaking_task is None:
+        raise HTTPException(status_code=503, detail="Service not available")
+
+    controller = data.get("controller", "").strip() if isinstance(data.get("controller"), str) else ""
+    user_id = data.get("userId", "") or ""
+    name = data.get("name", "") or ""
+
+    if not controller:
+        raise HTTPException(status_code=400, detail="controller is required")
+    if controller not in VALID_CONTROLLERS:
+        raise HTTPException(status_code=400, detail=f"Invalid controller: {controller}")
+
+    category = controller_to_category(controller)
+    if category is None:
+        raise HTTPException(status_code=400, detail="Controller not eligible for ranked matchmaking")
+
+    # Get ELO (default 1000 for anonymous / new players)
+    elo = 1000.0
+    if user_id and elo_manager is not None:
+        stats = await elo_manager.get_rating(user_id, category)
+        elo = float(stats["rating"])
+
+    player_id = str(uuid.uuid4())
+    await matchmaking_task.join(player_id, category, controller, elo, user_id, name)
+
+    queue_size = sum(1 for e in matchmaking_task._entries.values() if e["category"] == category)
+
+    return {
+        "playerId": player_id,
+        "category": category,
+        "elo": elo,
+        "queueSize": queue_size,
+    }
+
+
+@get("/api/matchmaking/status")
+async def matchmaking_status_endpoint(player_id: str) -> dict[str, Any]:
+    """Poll matchmaking status for a player.
+
+    Query: player_id=X
+    Returns: { status: "searching"|"matched"|"not_queued", ... }
+    """
+    if matchmaking_task is None:
+        raise HTTPException(status_code=503, detail="Service not available")
+
+    # Refresh player's activity (prevents stale pruning + Redis TTL expiry)
+    matchmaking_task.refresh(player_id)
+    entry = matchmaking_task._entries.get(player_id)
+    if entry and room_manager is not None:
+        await room_manager.matchmaking_refresh_ttl(entry["category"], player_id)
+
+    return matchmaking_task.get_status(player_id)
+
+
+@post("/api/matchmaking/cancel")
+async def matchmaking_cancel_endpoint(data: dict[str, str]) -> dict[str, bool]:
+    """Cancel matchmaking for a player.
+
+    Body: { playerId }
+    """
+    if matchmaking_task is None:
+        raise HTTPException(status_code=503, detail="Service not available")
+
+    player_id = data.get("playerId", "").strip()
+    if not player_id:
+        raise HTTPException(status_code=400, detail="playerId is required")
+
+    removed = await matchmaking_task.cancel(player_id)
+    return {"ok": removed}
+
+
 @get("/api/leaderboard")
 async def leaderboard(request: Request) -> dict[str, Any]:
     """Get the global leaderboard sorted by ELO.
@@ -1546,6 +1636,9 @@ app = Litestar(
         twilio_stream,
         phone_close,
         game_ws,
+        matchmaking_join_endpoint,
+        matchmaking_status_endpoint,
+        matchmaking_cancel_endpoint,
         leaderboard,
         get_elo,
         create_static_files_router(path="/src", directories=[ROOT / "src"]),

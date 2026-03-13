@@ -10,6 +10,7 @@ from litestar.testing import TestClient
 
 import server
 from elo import EloManager
+from matchmaking import MatchmakingTask
 from room_manager import RoomManager
 from server import app
 
@@ -641,6 +642,172 @@ class TestMatchComplete:
             resp = client.post(
                 "/api/match/complete",
                 content=json.dumps({"code": "a", "playerId": "b", "winner": 1}),
+                headers={"Content-Type": "application/json"},
+            )
+            assert resp.status_code == 503
+
+
+# ─── Matchmaking endpoints ─────────────────────
+
+
+@pytest.fixture()
+def mm_client():
+    """TestClient with fakeredis-backed RoomManager + MatchmakingTask."""
+    fake_server = fakeredis.FakeServer()
+    with TestClient(app=app) as client:
+        async_redis = fakeredis.aioredis.FakeRedis(
+            decode_responses=True, server=fake_server
+        )
+        rm = RoomManager(async_redis)
+        em = EloManager(async_redis)
+        server.room_manager = rm
+        server.elo_manager = em
+        task = MatchmakingTask(rm, em)
+        server.matchmaking_task = task
+        yield client
+        server.matchmaking_task = None
+        server.elo_manager = None
+        server.room_manager = None
+
+
+class TestMatchmakingJoin:
+    def test_join_returns_player_id(self, mm_client) -> None:
+        resp = mm_client.post(
+            "/api/matchmaking/join",
+            content=json.dumps({"controller": "controller"}),
+            headers={"Content-Type": "application/json"},
+        )
+        assert resp.status_code == 201
+        data = resp.json()
+        assert "playerId" in data
+        assert len(data["playerId"]) == 36  # UUID
+        assert data["category"] == "keyboard"
+        assert data["elo"] == 1000.0
+
+    def test_join_voice_category(self, mm_client) -> None:
+        resp = mm_client.post(
+            "/api/matchmaking/join",
+            content=json.dumps({"controller": "voice"}),
+            headers={"Content-Type": "application/json"},
+        )
+        assert resp.status_code == 201
+        assert resp.json()["category"] == "voice"
+
+    def test_join_non_ranked_returns_400(self, mm_client) -> None:
+        resp = mm_client.post(
+            "/api/matchmaking/join",
+            content=json.dumps({"controller": "simulated"}),
+            headers={"Content-Type": "application/json"},
+        )
+        assert resp.status_code == 400
+
+    def test_join_invalid_controller_returns_400(self, mm_client) -> None:
+        resp = mm_client.post(
+            "/api/matchmaking/join",
+            content=json.dumps({"controller": "telepathy"}),
+            headers={"Content-Type": "application/json"},
+        )
+        assert resp.status_code == 400
+
+    def test_join_missing_controller_returns_400(self, mm_client) -> None:
+        resp = mm_client.post(
+            "/api/matchmaking/join",
+            content=json.dumps({}),
+            headers={"Content-Type": "application/json"},
+        )
+        assert resp.status_code == 400
+
+    def test_join_queue_size(self, mm_client) -> None:
+        resp = mm_client.post(
+            "/api/matchmaking/join",
+            content=json.dumps({"controller": "controller"}),
+            headers={"Content-Type": "application/json"},
+        )
+        assert resp.json()["queueSize"] == 1
+
+    def test_join_without_service_returns_503(self) -> None:
+        with TestClient(app=app) as client:
+            server.matchmaking_task = None
+            resp = client.post(
+                "/api/matchmaking/join",
+                content=json.dumps({"controller": "controller"}),
+                headers={"Content-Type": "application/json"},
+            )
+            assert resp.status_code == 503
+
+
+class TestMatchmakingStatus:
+    def test_status_not_queued(self, mm_client) -> None:
+        resp = mm_client.get("/api/matchmaking/status?player_id=nobody")
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "not_queued"
+
+    def test_status_searching_after_join(self, mm_client) -> None:
+        join_resp = mm_client.post(
+            "/api/matchmaking/join",
+            content=json.dumps({"controller": "controller"}),
+            headers={"Content-Type": "application/json"},
+        )
+        pid = join_resp.json()["playerId"]
+
+        resp = mm_client.get(f"/api/matchmaking/status?player_id={pid}")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "searching"
+        assert data["queueSize"] == 1
+        assert data["threshold"] == 100
+
+    def test_status_without_service_returns_503(self) -> None:
+        with TestClient(app=app) as client:
+            server.matchmaking_task = None
+            resp = client.get("/api/matchmaking/status?player_id=x")
+            assert resp.status_code == 503
+
+
+class TestMatchmakingCancel:
+    def test_cancel_queued_player(self, mm_client) -> None:
+        join_resp = mm_client.post(
+            "/api/matchmaking/join",
+            content=json.dumps({"controller": "controller"}),
+            headers={"Content-Type": "application/json"},
+        )
+        pid = join_resp.json()["playerId"]
+
+        resp = mm_client.post(
+            "/api/matchmaking/cancel",
+            content=json.dumps({"playerId": pid}),
+            headers={"Content-Type": "application/json"},
+        )
+        assert resp.status_code == 201
+        assert resp.json()["ok"] is True
+
+        # Verify no longer queued
+        status_resp = mm_client.get(f"/api/matchmaking/status?player_id={pid}")
+        assert status_resp.json()["status"] == "not_queued"
+
+    def test_cancel_unknown_player(self, mm_client) -> None:
+        resp = mm_client.post(
+            "/api/matchmaking/cancel",
+            content=json.dumps({"playerId": "nobody"}),
+            headers={"Content-Type": "application/json"},
+        )
+        assert resp.status_code == 201
+        assert resp.json()["ok"] is False
+
+    def test_cancel_missing_player_id_returns_400(self, mm_client) -> None:
+        resp = mm_client.post(
+            "/api/matchmaking/cancel",
+            content=json.dumps({}),
+            headers={"Content-Type": "application/json"},
+        )
+        assert resp.status_code == 400
+
+    def test_cancel_without_service_returns_503(self) -> None:
+        with TestClient(app=app) as client:
+            server.matchmaking_task = None
+            resp = client.post(
+                "/api/matchmaking/cancel",
+                content=json.dumps({"playerId": "x"}),
                 headers={"Content-Type": "application/json"},
             )
             assert resp.status_code == 503

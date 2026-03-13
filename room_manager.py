@@ -236,6 +236,11 @@ class RoomManager:
         await self._redis.delete(ttl_key)  # type: ignore[misc]
         return bool(removed)
 
+    async def matchmaking_refresh_ttl(self, category: str, player_id: str) -> bool:
+        """Refresh the TTL for a matchmaking queue entry. Returns False if key doesn't exist."""
+        ttl_key = f"matchmaking_ttl:{category}:{player_id}"
+        return bool(await self._redis.expire(ttl_key, MATCHMAKING_ENTRY_TTL))  # type: ignore[misc]
+
     async def matchmaking_cleanup_expired(self, category: str) -> list[str]:
         """Remove queue entries whose TTL key has expired. Returns removed player IDs."""
         queue_key = f"matchmaking:{category}"

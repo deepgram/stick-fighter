@@ -20,6 +20,7 @@ const screens = {
   joinRoom: document.getElementById('join-room'),
   roomLobby: document.getElementById('room-lobby'),
   roomController: document.getElementById('room-controller'),
+  matchmaking: document.getElementById('matchmaking'),
   leaderboard: document.getElementById('leaderboard'),
   matchResults: document.getElementById('match-results'),
   onboarding: document.getElementById('onboarding'),
@@ -206,10 +207,7 @@ document.getElementById('btn-create-room').addEventListener('click', async () =>
   }
 });
 document.getElementById('btn-join-room').addEventListener('click', () => showScreen('joinRoom'));
-document.getElementById('btn-matchmaking').addEventListener('click', () => {
-  // Placeholder — wired up in US-015
-  console.log('[multiplayer] Matchmaking — not yet implemented');
-});
+document.getElementById('btn-matchmaking').addEventListener('click', () => showMatchmakingScreen());
 document.getElementById('btn-mp-back').addEventListener('click', () => showScreen('landing'));
 
 // Join room
@@ -745,6 +743,237 @@ document.getElementById('btn-leave').addEventListener('click', () => {
 });
 
 // ─────────────────────────────────────────────
+// Matchmaking
+// ─────────────────────────────────────────────
+let mmModeIdx = 0;
+let mmProviderIdx = 0;
+let mmPlayerId = null;
+let mmPollTimer = null;
+let mmWaitingGame = false;
+
+/** Map controller id to ELO category (mirrors elo.py) */
+function controllerToCategory(controller) {
+  if (controller === 'controller' || controller === 'keyboard') return 'keyboard';
+  if (controller === 'voice' || controller === 'phone') return 'voice';
+  return null;
+}
+
+function showMatchmakingScreen() {
+  mmModeIdx = 0;
+  mmProviderIdx = 0;
+  mmPlayerId = null;
+  document.getElementById('mm-select').classList.remove('hidden');
+  document.getElementById('mm-searching').classList.add('hidden');
+  updateMatchmakingControllerUI();
+  showScreen('matchmaking');
+}
+
+function updateMatchmakingControllerUI() {
+  const pills = document.querySelectorAll('#mm-ctrl-pills .mode-pill');
+  pills.forEach((pill, i) => pill.classList.toggle('selected', i === mmModeIdx));
+
+  const mode = INPUT_MODES[mmModeIdx];
+  const category = controllerToCategory(mode.id);
+  const searchBtn = document.getElementById('btn-mm-search');
+  const infoEl = document.getElementById('mm-ctrl-info');
+
+  if (category === null) {
+    searchBtn.disabled = true;
+    infoEl.innerHTML = '<div class="mm-warn">Bot controllers are not eligible for ranked matchmaking</div>';
+    return;
+  }
+
+  searchBtn.disabled = false;
+
+  if (mode.id === 'controller') {
+    const controls = [
+      { keys: ['W', 'A', 'S', 'D'], label: 'move' },
+      { keys: ['U', 'I', 'O'], label: 'punch' },
+      { keys: ['J', 'K', 'L'], label: 'kick' },
+    ];
+    infoEl.innerHTML = controls.map(row =>
+      `<div class="control-row">${row.keys.map(k => `<kbd>${k}</kbd>`).join(' ')} ${row.label}</div>`
+    ).join('') + `<div class="mode-desc">${mode.desc}</div>`;
+  } else if (mode.id === 'voice') {
+    infoEl.innerHTML = `<div class="voice-info">"punch" "kick" "jump"<br><span>"hard punch" "forward" "back"</span></div><div class="mode-desc">${mode.desc}</div>`;
+  } else if (mode.id === 'phone') {
+    infoEl.innerHTML = `<div class="voice-info">Call a phone number<br><span>Shout commands into the phone</span></div><div class="mode-desc">${mode.desc}</div>`;
+  }
+}
+
+// Mode pill clicks
+document.getElementById('mm-ctrl-pills').addEventListener('click', e => {
+  const pill = e.target.closest('.mode-pill');
+  if (!pill) return;
+  mmModeIdx = parseInt(pill.dataset.mode, 10);
+  updateMatchmakingControllerUI();
+});
+
+// LLM provider pill clicks (delegated from mm-ctrl-info)
+document.getElementById('mm-ctrl-info').addEventListener('click', e => {
+  const pill = e.target.closest('.provider-pill');
+  if (!pill) return;
+  mmProviderIdx = parseInt(pill.dataset.provider, 10);
+  updateMatchmakingControllerUI();
+});
+
+// Search button
+document.getElementById('btn-mm-search').addEventListener('click', startMatchmakingSearch);
+
+async function startMatchmakingSearch() {
+  const controller = INPUT_MODES[mmModeIdx].id;
+  const user = isLoggedIn() ? getUser() : null;
+
+  try {
+    const resp = await fetch('/api/matchmaking/join', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        controller,
+        userId: user ? (user.sub || user.id || '') : '',
+        name: user ? (user.name || '') : '',
+      }),
+    });
+
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      console.error('[matchmaking] Join failed:', err.detail || resp.status);
+      return;
+    }
+
+    const data = await resp.json();
+    mmPlayerId = data.playerId;
+
+    // Toggle to searching state
+    document.getElementById('mm-select').classList.add('hidden');
+    document.getElementById('mm-searching').classList.remove('hidden');
+    document.getElementById('mm-searching-text').textContent = 'Searching for opponent...';
+    document.getElementById('mm-wait-info').textContent =
+      `Category: ${data.category} | ELO: ${Math.round(data.elo)} | Queue: ${data.queueSize}`;
+
+    startMatchmakingPoll();
+  } catch (err) {
+    console.error('[matchmaking] Error:', err);
+  }
+}
+
+function startMatchmakingPoll() {
+  stopMatchmakingPoll();
+  if (!mmPlayerId) return;
+
+  mmPollTimer = setInterval(async () => {
+    if (!mmPlayerId) return;
+    try {
+      const resp = await fetch(`/api/matchmaking/status?player_id=${encodeURIComponent(mmPlayerId)}`);
+      if (!resp.ok) return;
+      const data = await resp.json();
+      handleMatchmakingStatus(data);
+    } catch (err) {
+      console.warn('[matchmaking] Poll error:', err);
+    }
+  }, 2000);
+}
+
+function stopMatchmakingPoll() {
+  if (mmPollTimer) {
+    clearInterval(mmPollTimer);
+    mmPollTimer = null;
+  }
+}
+
+function handleMatchmakingStatus(data) {
+  if (data.status === 'matched') {
+    stopMatchmakingPoll();
+    handleMatchFound(data);
+  } else if (data.status === 'searching') {
+    document.getElementById('mm-wait-info').textContent =
+      `Wait: ${data.waitTime}s | Queue: ${data.queueSize} | Threshold: \u00b1${data.threshold}`;
+  } else if (data.status === 'not_queued') {
+    // Player was removed (expired / pruned)
+    stopMatchmakingPoll();
+    mmPlayerId = null;
+    if (mmWaitingGame) {
+      if (game) { game.running = false; game = null; }
+      cleanupAdapters();
+      mmWaitingGame = false;
+    }
+    showMatchmakingScreen();
+  }
+}
+
+function handleMatchFound(data) {
+  // If playing a waiting game, stop it first
+  if (mmWaitingGame) {
+    if (game) { game.running = false; game = null; }
+    cleanupAdapters();
+    mmWaitingGame = false;
+  }
+
+  // Store room data (same pattern as room join)
+  localStorage.setItem('sf_roomCode', data.roomCode);
+  localStorage.setItem('sf_playerId', data.playerId);
+  localStorage.setItem('sf_playerNum', String(data.playerNum));
+
+  // Set controller indices for startMultiplayerFight
+  roomModeIdx = mmModeIdx;
+  roomProviderIdx = mmProviderIdx;
+
+  mmPlayerId = null;
+  startMultiplayerFight(data);
+}
+
+// Cancel button
+document.getElementById('btn-mm-cancel').addEventListener('click', async () => {
+  if (mmPlayerId) {
+    await fetch('/api/matchmaking/cancel', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ playerId: mmPlayerId }),
+    }).catch(() => {});
+  }
+  stopMatchmakingPoll();
+  mmPlayerId = null;
+  showMatchmakingScreen();
+});
+
+// Play while you wait
+document.getElementById('btn-mm-play-wait').addEventListener('click', () => {
+  mmWaitingGame = true;
+  // Start a SIM fight — keys for P1, simulated for P2
+  state = 'fighting';
+  for (const el of Object.values(screens)) el.classList.add('hidden');
+  canvas.classList.add('active');
+  resize();
+
+  const simInput1 = createInput(1, 0, 0); // Keys
+  const simInput2 = createInput(2, 3, 0); // SIM
+
+  game = new Game(canvas, simInput1, simInput2, sfx, { p1Label: 'You', p2Label: 'SIM Bot' });
+  game.start();
+
+  for (const adapter of activeAdapters) {
+    if (adapter.setGameRef) adapter.setGameRef(game);
+  }
+
+  sfx.preload().then(() => game.showFightAlert());
+  // Matchmaking poll continues in the background
+});
+
+// Back button
+document.getElementById('btn-mm-back').addEventListener('click', () => {
+  if (mmPlayerId) {
+    fetch('/api/matchmaking/cancel', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ playerId: mmPlayerId }),
+    }).catch(() => {});
+    stopMatchmakingPoll();
+    mmPlayerId = null;
+  }
+  showScreen('multiplayer');
+});
+
+// ─────────────────────────────────────────────
 // Leaderboard
 // ─────────────────────────────────────────────
 let lbCategory = 'all';
@@ -918,8 +1147,16 @@ window.addEventListener('keydown', e => {
     }
   } else if (state === 'fighting') {
     if (e.code === 'Enter' && game && game.roundOver && !peerConnection) {
-      // Single-player: Enter restarts
-      showOnboarding();
+      if (mmWaitingGame) {
+        // Return to matchmaking searching screen
+        if (game) { game.running = false; game = null; }
+        cleanupAdapters();
+        mmWaitingGame = false;
+        showScreen('matchmaking');
+      } else {
+        // Single-player: Enter restarts
+        showOnboarding();
+      }
     }
   }
 
@@ -929,6 +1166,18 @@ window.addEventListener('keydown', e => {
     else if (state === 'joinRoom') showScreen('multiplayer');
     else if (state === 'roomLobby') { stopRoomPolling(); showScreen('multiplayer'); }
     else if (state === 'roomController') { stopRoomPolling(); showScreen('multiplayer'); }
+    else if (state === 'matchmaking') {
+      if (mmPlayerId) {
+        fetch('/api/matchmaking/cancel', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ playerId: mmPlayerId }),
+        }).catch(() => {});
+        stopMatchmakingPoll();
+        mmPlayerId = null;
+      }
+      showScreen('multiplayer');
+    }
     else if (state === 'leaderboard') showScreen('landing');
     else if (state === 'matchResults') showLanding();
     else if (state === 'onboarding') showScreen('landing');

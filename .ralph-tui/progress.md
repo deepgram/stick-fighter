@@ -30,6 +30,7 @@ after each iteration and it's included in prompts for context.
 - **Matchmaking queue TTL pattern**: Two-key pattern in `room_manager.py` — sorted set `matchmaking:{category}` for ELO-scored queue, plus per-player TTL key `matchmaking_ttl:{category}:{player_id}` that auto-expires. Cleanup sweep removes orphaned sorted set entries whose TTL key is gone.
 - **Leaderboard viewer pattern**: `/api/leaderboard?user_id=X` returns `viewer` (user's own rank/stats) and `viewer_in_entries` (bool). For "all" category, picks user's best-rated category. Frontend highlights viewer's row in table and shows a separate viewer row when they're below the limit.
 - **Sync Redis seed helpers for ELO tests**: `_elo_client_with_data()` returns `(async_redis, sync_redis)` sharing a `FakeServer`. `_seed_player()` writes directly to Redis hashes + sorted sets. Avoids `asyncio.new_event_loop()` issues.
+- **Matchmaking pattern**: `matchmaking.py` has `MatchmakingTask` (background asyncio task). In-memory `_entries` dict for queue, `_matches` dict for results. Periodic `try_match()` groups by category, sorts by ELO, matches closest pairs within widening threshold. Room auto-created on match. Status polling refreshes both in-memory `refreshed_at` and Redis TTL. Server has `mm_client` fixture for endpoint tests.
 
 ---
 
@@ -388,4 +389,35 @@ after each iteration and it's included in prompts for context.
   - Sync FakeRedis + `_seed_player()` helper is cleaner than `asyncio.new_event_loop().run_until_complete()` for pre-populating ELO data in sync tests — avoids event loop mismatches
   - Viewer rank feature requires different logic per category: for "all" merge mode, pick best category; for specific category, use `get_player_rank()` directly
   - `escapeHtml()` via `document.createElement('div').textContent=str` is the simplest XSS prevention for user-supplied display names in the DOM
+---
+
+## 2026-03-13 - stick-fighter-d4c.16
+- Implemented ELO matchmaking queue (US-015)
+- `MatchmakingTask` background engine: in-memory queue + Redis backing, periodic matching every 3s
+- Matching algorithm: group by category (keyboard/voice), sort by ELO, find closest pairs within threshold
+- ELO threshold starts at ±100, widens by 50 every 10 seconds (so no player waits forever)
+- Match found → auto-creates room (create → join → selecting → set controllers → fighting)
+- Stale entry pruning after 60s without poll refresh; match results expire after 60s if unclaimed
+- Server endpoints: POST `/api/matchmaking/join`, GET `/api/matchmaking/status`, POST `/api/matchmaking/cancel`
+- `room_manager.matchmaking_refresh_ttl()` refreshes Redis TTL on status poll
+- Matchmaking screen in index.html: controller selection → search → status display (wait time, queue size, threshold)
+- Non-ranked controllers (SIM, LLM) blocked from matchmaking with clear UI message
+- "Play while you wait" starts a SIM fight with matchmaking poll continuing in background; match interrupts the SIM game
+- Cancel button and ESC key properly cancel matchmaking and clean up
+- MatchmakingTask integrated into server lifespan (start on boot, stop before cleanup task)
+- 39 new matchmaking unit tests + 14 server endpoint tests, all passing
+- Files changed:
+  - `matchmaking.py` — New: MatchmakingTask class with matching algorithm, pruning, lifecycle
+  - `room_manager.py` — Added `matchmaking_refresh_ttl` method
+  - `server.py` — Added MatchmakingTask import/global/lifespan, 3 endpoints (join, status, cancel), registered in app routes
+  - `index.html` — Added matchmaking screen HTML + CSS (controller selection, searching state, play-while-you-wait)
+  - `src/main.js` — Added matchmaking screen to screens dict, full matchmaking flow (search, poll, match found, cancel, play while you wait, ESC handler)
+  - `tests/test_matchmaking.py` — New: 39 tests across 8 test classes (join, cancel, status, threshold, match finding, room creation, pruning, lifecycle)
+  - `tests/test_server.py` — Added mm_client fixture, 14 matchmaking endpoint tests across 3 test classes (join, status, cancel)
+- **Learnings:**
+  - In-memory + Redis two-layer pattern works well for matchmaking: fast in-memory matching decisions + Redis for persistence/TTL expiry
+  - The wider threshold of the two players (max of both) ensures the longer-waiting player gets progressively easier matches
+  - Room creation in matchmaking requires the full status chain: waiting → selecting → fighting (can't skip statuses)
+  - `controller_to_category()` returning None for SIM/LLM is a natural gate for matchmaking eligibility — reuse existing ELO module logic
+  - "Play while you wait" needs careful state management: the matchmaking poll timer must survive screen transitions while the SIM fight runs
 ---
