@@ -296,3 +296,59 @@ class TestRedisStructure:
         fields = await redis.hkeys(key)
         expected = {"code", "p1_id", "p2_id", "p1_controller", "p2_controller", "status", "created_at"}
         assert set(fields) == expected
+
+
+# ─── Reset for rematch ────────────────────────────
+
+
+class TestResetForRematch:
+    @pytest.mark.asyncio
+    async def test_rematch_resets_controllers_and_status(self, manager: RoomManager) -> None:
+        room = await manager.create_room("p1")
+        code = room["code"]
+        await manager.join_room(code, "p2")
+        await manager.transition_status(code, "selecting")
+        await manager.set_controller(code, 1, "controller")
+        await manager.set_controller(code, 2, "voice")
+        await manager.transition_status(code, "fighting")
+
+        result = await manager.reset_for_rematch(code)
+        assert result["status"] == "selecting"
+        assert result["p1_controller"] == ""
+        assert result["p2_controller"] == ""
+        # Players should still be assigned
+        assert result["p1_id"] == "p1"
+        assert result["p2_id"] == "p2"
+
+    @pytest.mark.asyncio
+    async def test_rematch_from_finished(self, manager: RoomManager) -> None:
+        room = await manager.create_room("p1")
+        code = room["code"]
+        await manager.join_room(code, "p2")
+        await manager.transition_status(code, "selecting")
+        await manager.set_controller(code, 1, "controller")
+        await manager.set_controller(code, 2, "controller")
+        await manager.transition_status(code, "fighting")
+        await manager.transition_status(code, "finished")
+
+        result = await manager.reset_for_rematch(code)
+        assert result["status"] == "selecting"
+
+    @pytest.mark.asyncio
+    async def test_rematch_from_waiting_raises(self, manager: RoomManager) -> None:
+        room = await manager.create_room("p1")
+        with pytest.raises(ValueError, match="Cannot rematch"):
+            await manager.reset_for_rematch(room["code"])
+
+    @pytest.mark.asyncio
+    async def test_rematch_from_selecting_raises(self, manager: RoomManager) -> None:
+        room = await manager.create_room("p1")
+        await manager.join_room(room["code"], "p2")
+        await manager.transition_status(room["code"], "selecting")
+        with pytest.raises(ValueError, match="Cannot rematch"):
+            await manager.reset_for_rematch(room["code"])
+
+    @pytest.mark.asyncio
+    async def test_rematch_nonexistent_room_raises(self, manager: RoomManager) -> None:
+        with pytest.raises(ValueError, match="Room not found"):
+            await manager.reset_for_rematch("nonexistent-room-code")

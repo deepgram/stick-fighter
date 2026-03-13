@@ -511,6 +511,81 @@
       animation: pulse 2s ease-in-out infinite;
     }
 
+    /* ── Match results screen ── */
+    .match-results {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 20px;
+      padding: 20px;
+    }
+    .match-results.hidden { display: none; }
+
+    .results-winner {
+      font-size: 48px;
+      font-weight: bold;
+      letter-spacing: 3px;
+    }
+    .results-winner.p1-wins { color: var(--dg-primary); }
+    .results-winner.p2-wins { color: var(--dg-secondary); }
+    .results-winner.draw { color: var(--dg-slate); }
+
+    .results-health {
+      display: flex;
+      gap: 40px;
+      font-size: 14px;
+      color: var(--dg-slate);
+    }
+    .results-health .p1-hp { color: var(--dg-primary); }
+    .results-health .p2-hp { color: var(--dg-secondary); }
+
+    .results-elo {
+      display: flex;
+      gap: 30px;
+      font-size: 13px;
+    }
+    .results-elo .elo-change {
+      padding: 8px 16px;
+      background: var(--dg-charcoal);
+      border: 1px solid var(--dg-border);
+      border-radius: 6px;
+    }
+    .elo-positive { color: var(--dg-primary); }
+    .elo-negative { color: var(--dg-danger); }
+    .elo-neutral { color: var(--dg-slate); }
+
+    .results-actions {
+      display: flex;
+      gap: 16px;
+      margin-top: 8px;
+    }
+    .results-actions button {
+      font-family: monospace;
+      font-size: 14px;
+      font-weight: bold;
+      padding: 12px 32px;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .btn-rematch {
+      border: 2px solid var(--dg-primary);
+      background: rgba(19, 239, 149, 0.1);
+      color: var(--dg-primary);
+    }
+    .btn-rematch:hover { background: rgba(19, 239, 149, 0.2); }
+    .btn-leave {
+      border: 2px solid var(--dg-border);
+      background: var(--dg-charcoal);
+      color: var(--dg-slate);
+    }
+    .btn-leave:hover {
+      border-color: var(--dg-slate);
+      color: var(--dg-text);
+    }
+
     /* ── Auth / header user section ── */
     .header {
       position: relative;
@@ -699,6 +774,21 @@
 
     <div class="start-prompt">Press <kbd class="lg">ENTER</kbd> to fight</div>
     <div class="tips">Double-tap jump for somersault &middot; Hold back to block &middot; Attacks clash when hitboxes meet</div>
+  </div>
+
+  <!-- Match results screen -->
+  <div class="match-results hidden" id="match-results">
+    <h2 id="results-title">MATCH OVER</h2>
+    <div class="results-winner" id="results-winner">---</div>
+    <div class="results-health" id="results-health">
+      <span class="p1-hp" id="results-p1-hp">P1: ---</span>
+      <span class="p2-hp" id="results-p2-hp">P2: ---</span>
+    </div>
+    <div class="results-elo hidden" id="results-elo"></div>
+    <div class="results-actions">
+      <button class="btn-rematch" id="btn-rematch">REMATCH</button>
+      <button class="btn-leave" id="btn-leave">LEAVE</button>
+    </div>
   </div>
 
   <!-- Game canvas -->

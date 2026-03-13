@@ -20,6 +20,7 @@ const screens = {
   joinRoom: document.getElementById('join-room'),
   roomLobby: document.getElementById('room-lobby'),
   roomController: document.getElementById('room-controller'),
+  matchResults: document.getElementById('match-results'),
   onboarding: document.getElementById('onboarding'),
 };
 
@@ -542,6 +543,7 @@ function startMultiplayerFight(_roomData) {
       }
       if (msg.type === 'round_over' && game) {
         game.roundOver = true;
+        handleMultiplayerRoundOver(msg);
       }
     });
 
@@ -564,6 +566,162 @@ function startMultiplayerFight(_roomData) {
 
   Promise.all(readyPromises).then(() => game.showFightAlert());
 }
+
+// ─────────────────────────────────────────────
+// Multiplayer match results
+// ─────────────────────────────────────────────
+
+/** Handle the round_over message from the server */
+async function handleMultiplayerRoundOver(msg) {
+  // Brief delay so players see the KO on canvas before switching screens
+  await new Promise(r => setTimeout(r, 2000));
+
+  // Stop the game and clean up peer connection
+  if (game) { game.running = false; }
+  cleanupAdapters();
+  if (peerConnection) { peerConnection.close(); peerConnection = null; }
+
+  const myNum = parseInt(localStorage.getItem('sf_playerNum') || '1', 10);
+  const roomCode = localStorage.getItem('sf_roomCode');
+  const playerId = localStorage.getItem('sf_playerId');
+
+  // Determine result text
+  const winnerEl = document.getElementById('results-winner');
+  winnerEl.classList.remove('p1-wins', 'p2-wins', 'draw');
+
+  if (msg.winner === null || msg.winner === undefined) {
+    winnerEl.textContent = 'DRAW!';
+    winnerEl.classList.add('draw');
+  } else if (msg.winner === myNum) {
+    winnerEl.textContent = 'YOU WIN!';
+    winnerEl.classList.add(myNum === 1 ? 'p1-wins' : 'p2-wins');
+  } else {
+    winnerEl.textContent = 'YOU LOSE';
+    winnerEl.classList.add(msg.winner === 1 ? 'p1-wins' : 'p2-wins');
+  }
+
+  // Show reason for forfeit
+  if (msg.reason === 'forfeit') {
+    document.getElementById('results-title').textContent = 'OPPONENT DISCONNECTED';
+  } else {
+    document.getElementById('results-title').textContent = 'MATCH OVER';
+  }
+
+  // Health display
+  document.getElementById('results-p1-hp').textContent =
+    `P1: ${Math.max(0, Math.round(msg.p1_health))} HP`;
+  document.getElementById('results-p2-hp').textContent =
+    `P2: ${Math.max(0, Math.round(msg.p2_health))} HP`;
+
+  // Call match complete endpoint with ELO data
+  const user = isLoggedIn() ? getUser() : null;
+  const body = {
+    code: roomCode,
+    playerId,
+    winner: msg.winner,
+    p1Health: msg.p1_health,
+    p2Health: msg.p2_health,
+  };
+
+  // Add user info for ELO if logged in
+  if (user) {
+    if (myNum === 1) {
+      body.p1UserId = user.sub || user.id;
+      body.p1Name = user.name || 'Player';
+    } else {
+      body.p2UserId = user.sub || user.id;
+      body.p2Name = user.name || 'Player';
+    }
+  }
+
+  const eloEl = document.getElementById('results-elo');
+  eloEl.classList.add('hidden');
+  eloEl.innerHTML = '';
+
+  try {
+    const resp = await fetch('/api/match/complete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (resp.ok) {
+      const result = await resp.json();
+      if (result.elo?.updated) {
+        showEloChanges(result.elo, myNum);
+      }
+    }
+  } catch (err) {
+    console.warn('[match] Failed to report match result:', err);
+  }
+
+  // Show results screen
+  canvas.classList.remove('active');
+  showScreen('matchResults');
+  game = null;
+}
+
+/** Display ELO rating changes on the results screen */
+function showEloChanges(elo, myNum) {
+  const eloEl = document.getElementById('results-elo');
+  const myElo = myNum === 1 ? elo.p1 : elo.p2;
+  const opElo = myNum === 1 ? elo.p2 : elo.p1;
+
+  if (!myElo) return;
+
+  const ratingChange = myElo.rating - 1000; // Approximate — rating was updated
+  const changeClass = ratingChange > 0 ? 'elo-positive' : ratingChange < 0 ? 'elo-negative' : 'elo-neutral';
+
+  eloEl.innerHTML = `
+    <div class="elo-change">
+      <span class="${changeClass}">Your ELO: ${Math.round(myElo.rating)}</span>
+      <br><small>${elo.category} | W:${myElo.wins} L:${myElo.losses}</small>
+    </div>
+  `;
+  if (opElo) {
+    eloEl.innerHTML += `
+      <div class="elo-change">
+        <span class="elo-neutral">Opponent: ${Math.round(opElo.rating)}</span>
+      </div>
+    `;
+  }
+  eloEl.classList.remove('hidden');
+}
+
+// Results screen: Rematch button
+document.getElementById('btn-rematch').addEventListener('click', async () => {
+  const roomCode = localStorage.getItem('sf_roomCode');
+  const playerId = localStorage.getItem('sf_playerId');
+  if (!roomCode || !playerId) { showLanding(); return; }
+
+  try {
+    const resp = await fetch('/api/room/rematch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code: roomCode, playerId }),
+    });
+
+    if (!resp.ok) {
+      console.warn('[rematch] Failed:', resp.status);
+      showLanding();
+      return;
+    }
+
+    // Back to controller selection
+    showRoomControllerScreen();
+    startRoomPolling();
+  } catch (err) {
+    console.warn('[rematch] Error:', err);
+    showLanding();
+  }
+});
+
+// Results screen: Leave button
+document.getElementById('btn-leave').addEventListener('click', () => {
+  localStorage.removeItem('sf_roomCode');
+  localStorage.removeItem('sf_playerId');
+  localStorage.removeItem('sf_playerNum');
+  showLanding();
+});
 
 // ─────────────────────────────────────────────
 // Click handlers for mode pills (onboarding)
@@ -636,7 +794,8 @@ window.addEventListener('keydown', e => {
       startFight();
     }
   } else if (state === 'fighting') {
-    if (e.code === 'Enter' && game && game.roundOver) {
+    if (e.code === 'Enter' && game && game.roundOver && !peerConnection) {
+      // Single-player: Enter restarts
       showOnboarding();
     }
   }
@@ -647,6 +806,7 @@ window.addEventListener('keydown', e => {
     else if (state === 'joinRoom') showScreen('multiplayer');
     else if (state === 'roomLobby') { stopRoomPolling(); showScreen('multiplayer'); }
     else if (state === 'roomController') { stopRoomPolling(); showScreen('multiplayer'); }
+    else if (state === 'matchResults') showLanding();
     else if (state === 'onboarding') showScreen('landing');
   }
 });

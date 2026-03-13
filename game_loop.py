@@ -24,6 +24,7 @@ from game_engine import GameEngine
 
 TICK_RATE = 20  # Hz
 TICK_INTERVAL = 1.0 / TICK_RATE  # 50ms
+DISCONNECT_GRACE_PERIOD = 10.0  # seconds before forfeit
 
 
 # ─────────────────────────────────────────────
@@ -56,6 +57,10 @@ class RoomLoop:
     task: asyncio.Task[None] | None = None
     stopped: bool = False
     tick_count: int = 0
+    # Disconnect grace period tracking: player_num → seconds remaining
+    disconnect_timers: dict[int, float] = field(default_factory=dict)
+    # Winner from forfeit (set when grace period expires)
+    forfeit_winner: int | None = None
 
 
 def _serialize_fighter(f: Any) -> dict[str, Any]:
@@ -216,11 +221,40 @@ class GameLoopManager:
             if conn is not None:
                 conn.connected = False
 
+    def start_disconnect_timer(self, code: str, player: int) -> None:
+        """Start a disconnect grace period for a player."""
+        room = self._rooms.get(code)
+        if room is not None and not room.stopped:
+            room.disconnect_timers[player] = DISCONNECT_GRACE_PERIOD
+            print(f"[game-loop:{code}] Player {player} disconnected — {DISCONNECT_GRACE_PERIOD}s grace period")
+
+    def cancel_disconnect_timer(self, code: str, player: int) -> None:
+        """Cancel a disconnect grace period (player reconnected)."""
+        room = self._rooms.get(code)
+        if room is not None:
+            room.disconnect_timers.pop(player, None)
+            print(f"[game-loop:{code}] Player {player} reconnected — timer cancelled")
+
     async def _run_loop(self, room: RoomLoop) -> None:
         """The actual game loop — ticks at TICK_RATE Hz."""
         try:
             while not room.stopped:
                 tick_start = time.monotonic()
+
+                # Update disconnect timers
+                expired_players: list[int] = []
+                for p_num in list(room.disconnect_timers):
+                    room.disconnect_timers[p_num] -= TICK_INTERVAL
+                    if room.disconnect_timers[p_num] <= 0:
+                        expired_players.append(p_num)
+
+                # Handle forfeit from expired disconnect timers
+                for p_num in expired_players:
+                    room.disconnect_timers.pop(p_num, None)
+                    # The other player wins by forfeit
+                    room.forfeit_winner = 2 if p_num == 1 else 1
+                    room.engine.round_over = True
+                    print(f"[game-loop:{room.code}] Player {p_num} forfeited (disconnect timeout)")
 
                 # Drain buffered inputs for each player
                 p1_actions: set[str] = set()
@@ -244,16 +278,21 @@ class GameLoopManager:
 
                 # Check for round over
                 if room.engine.round_over:
+                    winner: int | None = room.forfeit_winner if room.forfeit_winner is not None else self._determine_winner(room.engine)
+                    reason = "forfeit" if room.forfeit_winner is not None else "ko"
+                    if room.forfeit_winner is None and room.engine.p1.health > 0 and room.engine.p2.health > 0:
+                        reason = "timeout"
                     # Send final state and stop
                     end_msg = json.dumps({
                         "type": "round_over",
                         "tick": room.tick_count,
-                        "winner": self._determine_winner(room.engine),
+                        "winner": winner,
+                        "reason": reason,
                         "p1_health": round(room.engine.p1.health, 1),
                         "p2_health": round(room.engine.p2.health, 1),
                     })
                     await self._broadcast(room, end_msg)
-                    print(f"[game-loop:{room.code}] Round over at tick {room.tick_count}")
+                    print(f"[game-loop:{room.code}] Round over at tick {room.tick_count} (reason={reason})")
                     break
 
                 # Sleep to maintain tick rate

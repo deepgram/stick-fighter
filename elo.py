@@ -26,7 +26,7 @@ K_FACTOR_THRESHOLD = 30
 
 # Input category mapping
 VOICE_CONTROLLERS = {"voice", "phone"}
-KEYBOARD_CONTROLLERS = {"keyboard"}
+KEYBOARD_CONTROLLERS = {"keyboard", "controller"}
 
 
 def controller_to_category(controller: str) -> str | None:

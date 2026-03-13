@@ -9,6 +9,7 @@ import pytest
 from litestar.testing import TestClient
 
 import server
+from elo import EloManager
 from room_manager import RoomManager
 from server import app
 
@@ -412,3 +413,234 @@ class TestRoomController:
                 headers={"Content-Type": "application/json"},
             )
             assert resp.status_code == 201, f"Controller '{ctrl}' rejected"
+
+
+# ─── Room rematch endpoint ─────────────────────
+
+
+def _create_fighting_room(
+    sync_redis,
+    code: str = "red-tiger-paw",
+    p1_id: str = "p1-uuid",
+    p2_id: str = "p2-uuid",
+    p1_ctrl: str = "controller",
+    p2_ctrl: str = "voice",
+) -> None:
+    """Pre-populate a room in 'fighting' status."""
+    key = f"room:{code}"
+    sync_redis.hset(key, mapping={
+        "code": code,
+        "p1_id": p1_id,
+        "p2_id": p2_id,
+        "p1_controller": p1_ctrl,
+        "p2_controller": p2_ctrl,
+        "status": "fighting",
+        "created_at": str(int(time.time())),
+    })
+    sync_redis.expire(key, 300)
+
+
+class TestRoomRematch:
+    def test_rematch_resets_room(self, room_client_with_sync) -> None:
+        client, sync_redis = room_client_with_sync
+        _create_fighting_room(sync_redis, "red-tiger-paw")
+        resp = client.post(
+            "/api/room/rematch",
+            content=json.dumps({"code": "red-tiger-paw", "playerId": "p1-uuid"}),
+            headers={"Content-Type": "application/json"},
+        )
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["status"] == "selecting"
+        # Verify controllers were cleared in Redis
+        assert sync_redis.hget("room:red-tiger-paw", "p1_controller") == ""
+        assert sync_redis.hget("room:red-tiger-paw", "p2_controller") == ""
+
+    def test_rematch_p2_can_request(self, room_client_with_sync) -> None:
+        client, sync_redis = room_client_with_sync
+        _create_fighting_room(sync_redis, "red-tiger-paw")
+        resp = client.post(
+            "/api/room/rematch",
+            content=json.dumps({"code": "red-tiger-paw", "playerId": "p2-uuid"}),
+            headers={"Content-Type": "application/json"},
+        )
+        assert resp.status_code == 201
+
+    def test_rematch_wrong_player_returns_403(self, room_client_with_sync) -> None:
+        client, sync_redis = room_client_with_sync
+        _create_fighting_room(sync_redis, "red-tiger-paw")
+        resp = client.post(
+            "/api/room/rematch",
+            content=json.dumps({"code": "red-tiger-paw", "playerId": "intruder"}),
+            headers={"Content-Type": "application/json"},
+        )
+        assert resp.status_code == 403
+
+    def test_rematch_nonexistent_room_returns_404(self, room_client_with_sync) -> None:
+        client, _ = room_client_with_sync
+        resp = client.post(
+            "/api/room/rematch",
+            content=json.dumps({"code": "nope", "playerId": "p1-uuid"}),
+            headers={"Content-Type": "application/json"},
+        )
+        assert resp.status_code == 404
+
+    def test_rematch_missing_fields_returns_400(self, room_client_with_sync) -> None:
+        client, _ = room_client_with_sync
+        resp = client.post(
+            "/api/room/rematch",
+            content=json.dumps({"code": ""}),
+            headers={"Content-Type": "application/json"},
+        )
+        assert resp.status_code == 400
+
+    def test_rematch_from_waiting_returns_400(self, room_client_with_sync) -> None:
+        client, sync_redis = room_client_with_sync
+        _create_waiting_room(sync_redis, "red-tiger-paw")
+        resp = client.post(
+            "/api/room/rematch",
+            content=json.dumps({"code": "red-tiger-paw", "playerId": "p1-uuid"}),
+            headers={"Content-Type": "application/json"},
+        )
+        assert resp.status_code == 400
+
+    def test_rematch_without_room_manager_returns_503(self) -> None:
+        with TestClient(app=app) as client:
+            server.room_manager = None
+            resp = client.post(
+                "/api/room/rematch",
+                content=json.dumps({"code": "a", "playerId": "b"}),
+                headers={"Content-Type": "application/json"},
+            )
+            assert resp.status_code == 503
+
+
+# ─── Match complete endpoint ────────────────────
+
+
+class TestMatchComplete:
+    def test_complete_transitions_to_finished(self, room_client_with_sync) -> None:
+        client, sync_redis = room_client_with_sync
+        _create_fighting_room(sync_redis, "red-tiger-paw")
+        resp = client.post(
+            "/api/match/complete",
+            content=json.dumps({
+                "code": "red-tiger-paw",
+                "playerId": "p1-uuid",
+                "winner": 1,
+                "p1Health": 80.0,
+                "p2Health": 0.0,
+            }),
+            headers={"Content-Type": "application/json"},
+        )
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["ok"] is True
+        assert data["winner"] == 1
+        # Room should be "finished" in Redis
+        assert sync_redis.hget("room:red-tiger-paw", "status") == "finished"
+
+    def test_complete_without_elo_returns_not_updated(self, room_client_with_sync) -> None:
+        client, sync_redis = room_client_with_sync
+        _create_fighting_room(sync_redis, "red-tiger-paw")
+        resp = client.post(
+            "/api/match/complete",
+            content=json.dumps({
+                "code": "red-tiger-paw",
+                "playerId": "p1-uuid",
+                "winner": 2,
+            }),
+            headers={"Content-Type": "application/json"},
+        )
+        data = resp.json()
+        assert data["elo"]["updated"] is False
+
+    def test_complete_with_elo_updates_ratings(self, room_client_with_sync) -> None:
+        client, sync_redis = room_client_with_sync
+        _create_fighting_room(sync_redis, "red-tiger-paw", p1_ctrl="controller", p2_ctrl="controller")
+        # Inject EloManager
+        async_redis = fakeredis.aioredis.FakeRedis(
+            decode_responses=True, server=sync_redis.connection_pool.connection_kwargs.get("server")
+        )
+        elo = EloManager(async_redis)
+        server.elo_manager = elo
+
+        resp = client.post(
+            "/api/match/complete",
+            content=json.dumps({
+                "code": "red-tiger-paw",
+                "playerId": "p1-uuid",
+                "winner": 1,
+                "p1UserId": "user-aaa",
+                "p2UserId": "user-bbb",
+                "p1Name": "Alice",
+                "p2Name": "Bob",
+            }),
+            headers={"Content-Type": "application/json"},
+        )
+        data = resp.json()
+        assert data["elo"]["updated"] is True
+        assert data["elo"]["category"] == "keyboard"
+        assert data["elo"]["p1"]["wins"] == 1
+        assert data["elo"]["p2"]["losses"] == 1
+
+    def test_complete_nonexistent_room_returns_404(self, room_client_with_sync) -> None:
+        client, _ = room_client_with_sync
+        resp = client.post(
+            "/api/match/complete",
+            content=json.dumps({"code": "nope", "playerId": "p1-uuid", "winner": 1}),
+            headers={"Content-Type": "application/json"},
+        )
+        assert resp.status_code == 404
+
+    def test_complete_wrong_player_returns_403(self, room_client_with_sync) -> None:
+        client, sync_redis = room_client_with_sync
+        _create_fighting_room(sync_redis, "red-tiger-paw")
+        resp = client.post(
+            "/api/match/complete",
+            content=json.dumps({"code": "red-tiger-paw", "playerId": "intruder", "winner": 1}),
+            headers={"Content-Type": "application/json"},
+        )
+        assert resp.status_code == 403
+
+    def test_complete_missing_fields_returns_400(self, room_client_with_sync) -> None:
+        client, _ = room_client_with_sync
+        resp = client.post(
+            "/api/match/complete",
+            content=json.dumps({"code": ""}),
+            headers={"Content-Type": "application/json"},
+        )
+        assert resp.status_code == 400
+
+    def test_complete_idempotent_finished(self, room_client_with_sync) -> None:
+        """Second call to complete on already-finished room doesn't fail."""
+        client, sync_redis = room_client_with_sync
+        key = "room:red-tiger-paw"
+        sync_redis.hset(key, mapping={
+            "code": "red-tiger-paw",
+            "p1_id": "p1-uuid",
+            "p2_id": "p2-uuid",
+            "p1_controller": "controller",
+            "p2_controller": "controller",
+            "status": "finished",
+            "created_at": str(int(time.time())),
+        })
+        sync_redis.expire(key, 300)
+
+        resp = client.post(
+            "/api/match/complete",
+            content=json.dumps({"code": "red-tiger-paw", "playerId": "p1-uuid", "winner": 1}),
+            headers={"Content-Type": "application/json"},
+        )
+        assert resp.status_code == 201
+        assert resp.json()["ok"] is True
+
+    def test_complete_without_room_manager_returns_503(self) -> None:
+        with TestClient(app=app) as client:
+            server.room_manager = None
+            resp = client.post(
+                "/api/match/complete",
+                content=json.dumps({"code": "a", "playerId": "b", "winner": 1}),
+                headers={"Content-Type": "application/json"},
+            )
+            assert resp.status_code == 503

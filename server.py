@@ -32,7 +32,7 @@ from room_manager import RoomManager
 from game_loop import GameLoopManager
 from signaling import SignalingManager, ICE_SERVERS
 from auth import OIDCConfig, exchange_code, refresh_tokens, fetch_userinfo, extract_user_from_id_token
-from elo import EloManager
+from elo import EloManager, controller_to_category
 
 # ─────────────────────────────────────────────
 # Config
@@ -663,6 +663,131 @@ async def room_controller(data: dict[str, str]) -> dict[str, Any]:
     }
 
 
+@post("/api/room/rematch")
+async def room_rematch(data: dict[str, str]) -> dict[str, Any]:
+    """Reset room for a rematch — clears controllers, returns to 'selecting' status."""
+    if room_manager is None:
+        raise HTTPException(status_code=503, detail="Room manager not available")
+
+    code = data.get("code", "").strip()
+    player_id = data.get("playerId", "").strip()
+    if not code or not player_id:
+        raise HTTPException(status_code=400, detail="code and playerId are required")
+
+    room = await room_manager.get_room(code)
+    if room is None:
+        raise HTTPException(status_code=404, detail="Room not found")
+
+    # Validate player belongs to this room
+    _resolve_player_num(room, player_id)
+
+    try:
+        room = await room_manager.reset_for_rematch(code)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    # Stop the existing game loop if running
+    if game_loop_manager is not None:
+        await game_loop_manager.stop_loop(code)
+
+    return {
+        "status": room["status"],
+        "code": room["code"],
+    }
+
+
+@post("/api/match/complete")
+async def match_complete(data: dict[str, Any]) -> dict[str, Any]:
+    """Process end-of-match: transition room to finished, update ELO if applicable.
+
+    Body: { code, playerId, winner (1|2|null), p1Health, p2Health,
+            p1UserId?, p2UserId?, p1Name?, p2Name? }
+    """
+    if room_manager is None:
+        raise HTTPException(status_code=503, detail="Room manager not available")
+
+    code = data.get("code", "").strip() if isinstance(data.get("code"), str) else ""
+    player_id = data.get("playerId", "").strip() if isinstance(data.get("playerId"), str) else ""
+    if not code or not player_id:
+        raise HTTPException(status_code=400, detail="code and playerId are required")
+
+    room = await room_manager.get_room(code)
+    if room is None:
+        raise HTTPException(status_code=404, detail="Room not found")
+
+    _resolve_player_num(room, player_id)
+
+    # Transition to finished (idempotent — skip if already finished)
+    if room["status"] == "fighting":
+        try:
+            await room_manager.transition_status(code, "finished")
+        except ValueError:
+            pass  # Already transitioned
+
+    winner = data.get("winner")  # 1, 2, or None for draw
+
+    # ELO update — only if both players are logged in and controllers are ranked
+    elo_result: dict[str, Any] = {"updated": False}
+
+    p1_user_id = data.get("p1UserId", "")
+    p2_user_id = data.get("p2UserId", "")
+    p1_name = data.get("p1Name", "")
+    p2_name = data.get("p2Name", "")
+
+    if elo_manager is not None and p1_user_id and p2_user_id:
+        # Determine ELO category from controllers
+        p1_cat = controller_to_category(room.get("p1_controller", ""))
+        p2_cat = controller_to_category(room.get("p2_controller", ""))
+
+        # Both must map to the same ranked category
+        if p1_cat and p2_cat and p1_cat == p2_cat:
+            category = p1_cat
+
+            # Store display names
+            if p1_name:
+                await elo_manager.set_player_name(p1_user_id, p1_name)
+            if p2_name:
+                await elo_manager.set_player_name(p2_user_id, p2_name)
+
+            is_draw = winner is None
+            if is_draw:
+                w_stats, l_stats = await elo_manager.update_ratings(
+                    p1_user_id, p2_user_id, category, draw=True
+                )
+                elo_result = {
+                    "updated": True,
+                    "category": category,
+                    "p1": w_stats,
+                    "p2": l_stats,
+                }
+            elif winner == 1:
+                w_stats, l_stats = await elo_manager.update_ratings(
+                    p1_user_id, p2_user_id, category
+                )
+                elo_result = {
+                    "updated": True,
+                    "category": category,
+                    "p1": w_stats,
+                    "p2": l_stats,
+                }
+            elif winner == 2:
+                w_stats, l_stats = await elo_manager.update_ratings(
+                    p2_user_id, p1_user_id, category
+                )
+                elo_result = {
+                    "updated": True,
+                    "category": category,
+                    "p1": l_stats,
+                    "p2": w_stats,
+                }
+
+    return {
+        "ok": True,
+        "winner": winner,
+        "elo": elo_result,
+    }
+
+
 # ─────────────────────────────────────────────
 # WebRTC signaling
 # ─────────────────────────────────────────────
@@ -1073,8 +1198,9 @@ async def game_ws(socket: WebSocket, code: str) -> None:
     if room is None:
         room = game_loop_manager.create_room_loop(code)
 
-    # Register this player
+    # Register this player (and cancel any disconnect timer if reconnecting)
     conn = game_loop_manager.add_player(code, player, socket)
+    game_loop_manager.cancel_disconnect_timer(code, player)
 
     # Start the game loop if both players are connected
     if len(room.players) >= 2 and room.task is None:
@@ -1092,6 +1218,7 @@ async def game_ws(socket: WebSocket, code: str) -> None:
                 await conn.input_queue.put({
                     "actions": msg.get("actions", []),
                     "just_pressed": msg.get("just_pressed", []),
+                    "seq": msg.get("seq", 0),
                 })
 
                 # Refresh room TTL on input activity
@@ -1107,8 +1234,10 @@ async def game_ws(socket: WebSocket, code: str) -> None:
         print(f"[game-ws:{code}] Player {player} disconnected: {type(e).__name__}")
     finally:
         game_loop_manager.remove_player(code, player)
-        # If no players left, stop the loop
-        if room and not room.players:
+        # Start disconnect grace period instead of immediately stopping
+        if room and not room.stopped and room.task is not None:
+            game_loop_manager.start_disconnect_timer(code, player)
+        elif room and not room.players:
             await game_loop_manager.stop_loop(code)
         print(f"[game-ws:{code}] Player {player} cleaned up")
 
@@ -1345,6 +1474,8 @@ app = Litestar(
         room_join,
         room_status,
         room_controller,
+        room_rematch,
+        match_complete,
         rtc_config,
         signal_send,
         signal_listen,

@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from game_loop import (
+    DISCONNECT_GRACE_PERIOD,
     TICK_INTERVAL,
     TICK_RATE,
     GameLoopManager,
@@ -517,3 +518,92 @@ class TestDetermineWinner:
         engine.p1.health = 50
         engine.p2.health = 50
         assert GameLoopManager._determine_winner(engine) is None
+
+
+# ─── Disconnect grace period ──────────────────────
+
+
+class TestDisconnectGracePeriod:
+    def test_disconnect_grace_constant(self) -> None:
+        assert DISCONNECT_GRACE_PERIOD == 10.0
+
+    def test_start_disconnect_timer(self) -> None:
+        mgr = GameLoopManager()
+        room = mgr.create_room_loop("abc")
+        mgr.start_disconnect_timer("abc", 1)
+        assert 1 in room.disconnect_timers
+        assert room.disconnect_timers[1] == DISCONNECT_GRACE_PERIOD
+
+    def test_cancel_disconnect_timer(self) -> None:
+        mgr = GameLoopManager()
+        room = mgr.create_room_loop("abc")
+        room.disconnect_timers[1] = 5.0
+        mgr.cancel_disconnect_timer("abc", 1)
+        assert 1 not in room.disconnect_timers
+
+    def test_start_timer_nonexistent_room(self) -> None:
+        mgr = GameLoopManager()
+        # Should not raise
+        mgr.start_disconnect_timer("nonexistent", 1)
+
+    def test_cancel_timer_nonexistent_room(self) -> None:
+        mgr = GameLoopManager()
+        # Should not raise
+        mgr.cancel_disconnect_timer("nonexistent", 1)
+
+    def test_room_loop_defaults(self) -> None:
+        room = RoomLoop(code="test", engine=GameEngine())
+        assert room.disconnect_timers == {}
+        assert room.forfeit_winner is None
+
+    @pytest.mark.asyncio
+    async def test_forfeit_on_disconnect_timeout(self) -> None:
+        """Verify that when a disconnect timer expires, the other player wins."""
+        mgr = GameLoopManager()
+        room = mgr.create_room_loop("abc")
+        sock1 = _make_mock_socket()
+        sock2 = _make_mock_socket()
+        mgr.add_player("abc", 1, sock1)
+        mgr.add_player("abc", 2, sock2)
+
+        # Set a very short disconnect timer for P2 (will expire quickly)
+        room.disconnect_timers[2] = TICK_INTERVAL * 2  # 2 ticks = 100ms
+
+        mgr.start_loop("abc")
+        await asyncio.sleep(0.3)  # Let ticks run past the timer
+        await mgr.stop_loop("abc")
+
+        # Check that a round_over with forfeit reason was sent
+        round_over_msgs = []
+        for call in sock1.send_data.call_args_list:
+            msg = json.loads(call.args[0])
+            if msg.get("type") == "round_over":
+                round_over_msgs.append(msg)
+
+        assert len(round_over_msgs) >= 1
+        assert round_over_msgs[0]["winner"] == 1  # P1 wins because P2 disconnected
+        assert round_over_msgs[0]["reason"] == "forfeit"
+
+    @pytest.mark.asyncio
+    async def test_no_forfeit_if_timer_cancelled(self) -> None:
+        """Verify cancelling the timer prevents forfeit."""
+        mgr = GameLoopManager()
+        mgr.create_room_loop("abc")
+        sock1 = _make_mock_socket()
+        sock2 = _make_mock_socket()
+        mgr.add_player("abc", 1, sock1)
+        mgr.add_player("abc", 2, sock2)
+
+        # Start and immediately cancel
+        mgr.start_disconnect_timer("abc", 2)
+        mgr.cancel_disconnect_timer("abc", 2)
+
+        mgr.start_loop("abc")
+        await asyncio.sleep(0.15)
+        await mgr.stop_loop("abc")
+
+        # Should NOT have a forfeit round_over
+        for call in sock1.send_data.call_args_list:
+            msg = json.loads(call.args[0])
+            if msg.get("type") == "round_over":
+                assert msg.get("reason") != "forfeit"

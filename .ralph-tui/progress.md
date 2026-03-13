@@ -23,6 +23,9 @@ after each iteration and it's included in prompts for context.
 - **Input send timing**: Tap into `localInput.endFrame()` to capture actions/justPressed before they're cleared — this is when the game loop has just consumed them. Avoids modifying the Game class.
 - **Prediction + rollback pattern**: `src/prediction.js` has `PredictionManager` that buffers local inputs with incrementing `seq` numbers. Server echoes back `p1_input_seq`/`p2_input_seq` in snapshots. On mismatch: restore server state via `Fighter.fromSnapshot()`, replay unconfirmed inputs (seq > confirmed), apply visual smoothing offsets that decay over frames. Game._draw() temporarily offsets fighter positions for rendering, then restores.
 - **Fighter serialization**: `Fighter.toSnapshot()`/`fromSnapshot()` use server snapshot format (snake_case keys). `fromSnapshot` resets `_prevImpact` to null. `animTimer` and `events` are not serialized (cosmetic/transient).
+- **Match flow pattern**: Game loop sends `round_over` with `winner`, `reason` ("ko"/"timeout"/"forfeit"), and health. Client calls `POST /api/match/complete` (transitions to finished, updates ELO). Rematch via `POST /api/room/rematch` resets to "selecting". Leave clears localStorage room data.
+- **Disconnect grace period**: `GameLoopManager.start_disconnect_timer(code, player)` starts a 10s countdown in the game loop tick. Timer decrements by `TICK_INTERVAL` each tick. Expiry → `room.forfeit_winner` set → `round_over`. Timer cancelled on reconnect via `cancel_disconnect_timer()`.
+- **Controller → ELO category mapping**: UI mode IDs ("controller", "voice", "phone") differ from ELO categories ("keyboard", "voice"). `elo.controller_to_category()` bridges the gap. "controller" and "keyboard" both map to "keyboard" category.
 
 ---
 
@@ -302,4 +305,35 @@ after each iteration and it's included in prompts for context.
   - Visual smoothing as position offset (old - new) that decays exponentially is much simpler than interpolation and prevents jarring snaps
   - `asyncio.Queue[dict[str, Any]]` is needed for mypy when the queue carries mixed-type dicts (actions: list[str] + seq: int)
   - Fighter serialization should NOT include `animTimer` (cosmetic breathing animation) or `events` (per-frame transient set) — these would cause false rollback triggers
+---
+
+## 2026-03-13 - stick-fighter-d4c.13
+- Implemented multiplayer match flow end-to-end: results screen, rematch, leave, ELO integration, disconnect grace period
+- Results screen shows winner (YOU WIN/YOU LOSE/DRAW), health stats, ELO changes (if both logged in), rematch and leave buttons
+- POST `/api/match/complete` — transitions room to "finished", calculates ELO for logged-in players with matching controller categories
+- POST `/api/room/rematch` — resets room to "selecting" (clears controllers, keeps players), stops game loop
+- `room_manager.reset_for_rematch()` — only allowed from "fighting" or "finished" status
+- Disconnect grace period: 10-second countdown in game loop; expired timer → forfeit (other player wins)
+- `GameLoopManager.start_disconnect_timer()`/`cancel_disconnect_timer()` — WS handler starts timer on disconnect, cancels on reconnect
+- Game loop `round_over` messages now include `reason` field: "ko", "timeout", or "forfeit"
+- WebSocket handler now forwards `seq` field from input messages to the queue (was missing)
+- Fixed `KEYBOARD_CONTROLLERS` in elo.py to include "controller" (the UI mode ID) alongside "keyboard"
+- Frontend: 2-second delay after KO before showing results, ESC/Leave clears localStorage room data
+- 28 new tests: 8 disconnect grace period (game_loop), 7 rematch endpoint, 8 match complete endpoint, 5 room_manager reset
+- Files changed:
+  - `index.html` — Added match-results screen div + CSS (winner, health, ELO, rematch/leave buttons)
+  - `src/main.js` — Added matchResults screen, handleMultiplayerRoundOver, showEloChanges, rematch/leave handlers, ESC for results
+  - `server.py` — Added `room_rematch` POST, `match_complete` POST, imported `controller_to_category`, WS handler uses disconnect timers + forwards seq
+  - `game_loop.py` — Added `DISCONNECT_GRACE_PERIOD`, `disconnect_timers`/`forfeit_winner` on RoomLoop, timer management methods, forfeit logic in run loop, `reason` field in round_over
+  - `room_manager.py` — Added `reset_for_rematch` method
+  - `elo.py` — Added "controller" to `KEYBOARD_CONTROLLERS`
+  - `tests/test_server.py` — Added TestRoomRematch (7 tests), TestMatchComplete (8 tests)
+  - `tests/test_game_loop.py` — Added TestDisconnectGracePeriod (8 tests)
+  - `tests/test_room_manager.py` — Added TestResetForRematch (5 tests)
+- **Learnings:**
+  - UI mode IDs ("controller") don't match ELO category names ("keyboard") — `controller_to_category` must handle both naming conventions
+  - Disconnect grace timers integrated into game loop ticks (decrement by TICK_INTERVAL each tick) are simpler and more deterministic than separate asyncio tasks
+  - `forfeit_winner` must be checked with `is not None` not truthiness — `0` would be falsy but `forfeit_winner` is 1 or 2
+  - mypy catches redefined variables in the same scope — variable type annotations (`winner: int | None`) conflict with earlier assignments of different types
+  - WebSocket handler was missing `seq` forwarding to input queue — this affected server-side prediction tracking
 ---

@@ -165,6 +165,32 @@ class RoomManager:
         room["status"] = new_status
         return room
 
+    async def reset_for_rematch(self, code: str) -> dict[str, str]:
+        """Reset a room for a rematch — clear controllers, set status to 'selecting'.
+
+        Room must be in 'fighting' or 'finished' status. Players stay assigned.
+        Raises ValueError if room not found or invalid status.
+        """
+        room = await self.get_room(code)
+        if room is None:
+            raise ValueError("Room not found or expired")
+
+        if room["status"] not in ("fighting", "finished"):
+            raise ValueError(f"Cannot rematch from status '{room['status']}'")
+
+        key = _room_key(code)
+        await self._redis.hset(key, mapping={  # type: ignore[misc]
+            "p1_controller": "",
+            "p2_controller": "",
+            "status": "selecting",
+        })
+        await self._redis.expire(key, ROOM_TTL)  # type: ignore[misc]
+
+        room["p1_controller"] = ""
+        room["p2_controller"] = ""
+        room["status"] = "selecting"
+        return room
+
     async def refresh_ttl(self, code: str) -> bool:
         """Refresh the room's TTL on activity. Returns False if room doesn't exist."""
         return bool(await self._redis.expire(_room_key(code), ROOM_TTL))  # type: ignore[misc]
