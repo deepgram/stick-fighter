@@ -15,6 +15,7 @@ after each iteration and it's included in prompts for context.
 - **Redis async typing**: `redis.asyncio.Redis` methods return `Awaitable[T] | T` unions — mypy can't narrow these, so `# type: ignore[misc]` is needed on `await` calls. Standard practice for redis-py async code.
 - **fakeredis for testing**: Use `fakeredis.aioredis.FakeRedis(decode_responses=True)` as a drop-in for `redis.asyncio.Redis` in tests. No real Redis needed.
 - **Room manager pattern**: `room_manager.py` encapsulates all Redis room ops. Import `RoomManager` + `generate_room_code`. Server creates instance via lifespan context manager.
+- **Game loop pattern**: `game_loop.py` manages per-room asyncio tasks. `GameLoopManager` creates/starts/stops room loops. Each `RoomLoop` has a `GameEngine`, player connections with input queues, and broadcasts state at 20Hz. Mock WebSockets with `MagicMock` + `AsyncMock(send_data=...)` for testing.
 
 ---
 
@@ -80,4 +81,27 @@ after each iteration and it's included in prompts for context.
   - mypy infers `int` from `f * 6` (int * int); must use `float()` when other branches assign `float` to same variable
   - Skeleton building is needed server-side for hitbox computation (not just rendering)
   - `_localToWorld` flip rotation must be ported exactly for somersault hitbox accuracy
+---
+
+## 2026-03-13 - stick-fighter-d4c.6
+- Implemented server game loop with input processing and state broadcast
+- GameLoopManager runs one asyncio task per active room at 20Hz tick rate
+- Player inputs arrive via WebSocket, buffered in asyncio.Queues, consumed each tick
+- Input merging: held actions use latest frame, edge-triggered accumulate across buffered frames
+- Authoritative state snapshots broadcast to all connected players each tick
+- State includes: fighter positions, health, velocity, state, attacks, stun, dash, flipping, events
+- Round over detection with winner determination (KO, timeout, draw)
+- Disconnected players auto-removed; empty rooms auto-cleaned
+- WebSocket endpoint `/ws/game/{code}?player=1|2` for multiplayer game sessions
+- GameLoopManager integrated into server lifespan (created on startup, stop_all on shutdown)
+- 34 new tests covering: input draining, serialization, snapshots, CRUD, lifecycle, tick behavior, determinism, winner logic
+- Files changed:
+  - `game_loop.py` — New: GameLoopManager, RoomLoop, PlayerConnection, input draining, state serialization, 20Hz broadcast loop
+  - `server.py` — Added GameLoopManager import, global instance, lifespan integration, `/ws/game/{code}` WebSocket endpoint, registered in app routes
+  - `tests/test_game_loop.py` — New: 34 tests across 9 test classes
+- **Learnings:**
+  - `asyncio.Queue.get_nowait()` in a while loop is the cleanest way to drain buffered inputs without blocking
+  - Mock WebSockets for testing: `MagicMock()` with `send_data = AsyncMock()` — no need for real server
+  - `time.monotonic()` for tick timing is more reliable than `time.time()` (immune to system clock changes)
+  - Input merging strategy matters: held actions (directional) use latest frame, edge-triggered (attacks) must accumulate to prevent dropped inputs
 ---

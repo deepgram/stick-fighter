@@ -29,6 +29,7 @@ from litestar.static_files import create_static_files_router
 from litestar.exceptions import HTTPException
 
 from room_manager import RoomManager
+from game_loop import GameLoopManager
 
 # ─────────────────────────────────────────────
 # Config
@@ -41,19 +42,24 @@ ROOT = Path(__file__).parent
 # ─────────────────────────────────────────────
 
 room_manager: RoomManager | None = None
+game_loop_manager: GameLoopManager | None = None
 
 
 @asynccontextmanager
 async def lifespan(app: Litestar) -> AsyncGenerator[None, None]:
-    """Start/stop the Redis connection pool used by RoomManager."""
-    global room_manager  # noqa: PLW0603
+    """Start/stop the Redis connection pool and game loop manager."""
+    global room_manager, game_loop_manager  # noqa: PLW0603
     redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379")
     pool = aioredis.from_url(redis_url, decode_responses=True)
     room_manager = RoomManager(pool)
+    game_loop_manager = GameLoopManager()
     print(f"[redis] Connected to {redis_url}")
     try:
         yield
     finally:
+        if game_loop_manager is not None:
+            await game_loop_manager.stop_all()
+        game_loop_manager = None
         await pool.aclose()
         room_manager = None
         print("[redis] Connection closed")
@@ -787,6 +793,84 @@ async def phone_close(data: dict[str, Any]) -> dict:
 
 
 # ─────────────────────────────────────────────
+# Game WebSocket (multiplayer input + state sync)
+# ─────────────────────────────────────────────
+
+@websocket("/ws/game/{code:str}")
+async def game_ws(socket: WebSocket, code: str) -> None:
+    """WebSocket for multiplayer game input and authoritative state broadcast.
+
+    Query params:
+        player: 1 or 2
+
+    Client sends: {"actions": ["left","down"], "just_pressed": ["heavyKick"]}
+    Server sends: state snapshots at 20Hz + round_over events
+    """
+    if game_loop_manager is None:
+        await socket.close(code=4000, reason="Game loop manager not initialized")
+        return
+
+    # Parse player number from query string
+    player_str = socket.query_params.get("player", "0")
+    try:
+        player = int(player_str)
+    except (ValueError, TypeError):
+        await socket.close(code=4001, reason="Invalid player number")
+        return
+
+    if player not in (1, 2):
+        await socket.close(code=4001, reason="player must be 1 or 2")
+        return
+
+    await socket.accept()
+    print(f"[game-ws:{code}] Player {player} connected")
+
+    # Get or create the room loop
+    room = game_loop_manager.get_room_loop(code)
+    if room is None:
+        room = game_loop_manager.create_room_loop(code)
+
+    # Register this player
+    conn = game_loop_manager.add_player(code, player, socket)
+
+    # Start the game loop if both players are connected
+    if len(room.players) >= 2 and room.task is None:
+        game_loop_manager.start_loop(code)
+    elif len(room.players) < 2:
+        # Notify player they're waiting
+        await socket.send_data(json.dumps({"type": "waiting", "player": player}), mode="text")
+
+    try:
+        while conn.connected and not room.stopped:
+            raw = await socket.receive_data(mode="text")
+            msg = json.loads(raw)
+
+            if msg.get("type") == "input":
+                await conn.input_queue.put({
+                    "actions": msg.get("actions", []),
+                    "just_pressed": msg.get("just_pressed", []),
+                })
+
+                # Refresh room TTL on input activity
+                if room_manager is not None:
+                    await room_manager.refresh_ttl(code)
+
+            elif msg.get("type") == "start" and room.task is None:
+                # Allow explicit start (e.g., after both players ready)
+                if len(room.players) >= 2:
+                    game_loop_manager.start_loop(code)
+
+    except Exception as e:
+        print(f"[game-ws:{code}] Player {player} disconnected: {type(e).__name__}")
+    finally:
+        game_loop_manager.remove_player(code, player)
+        # If no players left, stop the loop
+        if room and not room.players:
+            await game_loop_manager.stop_loop(code)
+        print(f"[game-ws:{code}] Player {player} cleaned up")
+
+
+# ─────────────────────────────────────────────
 # App
 # ─────────────────────────────────────────────
 
@@ -808,6 +892,7 @@ app = Litestar(
         twilio_incoming,
         twilio_stream,
         phone_close,
+        game_ws,
         create_static_files_router(path="/src", directories=[ROOT / "src"]),
         create_static_files_router(path="/assets", directories=[ROOT / "assets"]),
     ],
