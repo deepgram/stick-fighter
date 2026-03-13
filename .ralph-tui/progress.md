@@ -199,3 +199,26 @@ after each iteration and it's included in prompts for context.
   - OIDC endpoints (authorize, token, userinfo) can be derived from issuer URL as convention but should be overridable via env vars
   - `sessionStorage` for CSRF state parameter is better than `localStorage` — it's scoped to the tab and auto-clears on close
 ---
+
+## 2026-03-13 - stick-fighter-d4c.14
+- Implemented ELO rating system with Redis persistence
+- Standard ELO formula: expected score E = 1/(1 + 10^((Rb-Ra)/400)), K-factor 32 (new) / 16 (established, ≥30 matches)
+- New players start at ELO 1000
+- Separate ELO tracked per input category: "voice" (mic/phone) and "keyboard"
+- ELO stored in Redis with no TTL (persistent): hash `elo:{user_id}:{category}` + sorted set `leaderboard:{category}`
+- Player display names stored at `player:{user_id}` hash for leaderboard
+- Atomic updates via Redis pipeline (both players updated in one transaction)
+- `controller_to_category()` maps input controllers to ELO categories (voice/phone→voice, keyboard→keyboard, sim/llm→None)
+- Server endpoints: GET `/api/leaderboard` (with category filter), GET `/api/elo/{user_id}` (with optional category)
+- EloManager integrated into server lifespan (shares Redis pool with RoomManager)
+- 43 new tests: pure functions (expected score, K-factor, ELO calc, category mapping), async manager (ratings, names, updates, leaderboard, ranks), server endpoints
+- Files changed:
+  - `elo.py` — New: EloManager class, ELO calculation functions, controller-to-category mapping, Redis key helpers
+  - `server.py` — Added EloManager import/global/lifespan, GET `/api/leaderboard` + GET `/api/elo/{user_id}` endpoints, registered in app routes
+  - `tests/test_elo.py` — New: 43 tests across 12 test classes
+- **Learnings:**
+  - mypy widens `dict[str, str | float | int]` to `dict[str, object]` when mixing literal types in inline dict construction — use `dict[str, Any]` instead
+  - Redis sorted sets (`ZADD`/`ZREVRANGE`) are ideal for leaderboards — O(log N) insert, O(log N + M) range query
+  - Redis pipelines guarantee atomicity for multi-key updates without MULTI/EXEC overhead
+  - `controller_to_category` utility is exported for use by match flow (US-012) but not imported in server.py yet to avoid ruff F401
+---

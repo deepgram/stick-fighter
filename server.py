@@ -32,6 +32,7 @@ from room_manager import RoomManager
 from game_loop import GameLoopManager
 from signaling import SignalingManager, ICE_SERVERS
 from auth import OIDCConfig, exchange_code, refresh_tokens, fetch_userinfo, extract_user_from_id_token
+from elo import EloManager
 
 # ─────────────────────────────────────────────
 # Config
@@ -47,18 +48,20 @@ room_manager: RoomManager | None = None
 game_loop_manager: GameLoopManager | None = None
 signaling_manager: SignalingManager | None = None
 oidc_config: OIDCConfig | None = None
+elo_manager: EloManager | None = None
 
 
 @asynccontextmanager
 async def lifespan(app: Litestar) -> AsyncGenerator[None, None]:
     """Start/stop the Redis connection pool and game loop manager."""
-    global room_manager, game_loop_manager, signaling_manager, oidc_config  # noqa: PLW0603
+    global room_manager, game_loop_manager, signaling_manager, oidc_config, elo_manager  # noqa: PLW0603
     redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379")
     pool = aioredis.from_url(redis_url, decode_responses=True)
     room_manager = RoomManager(pool)
     game_loop_manager = GameLoopManager()
     signaling_manager = SignalingManager()
     oidc_config = OIDCConfig.from_env()
+    elo_manager = EloManager(pool)
     if oidc_config.configured:
         print(f"[auth] OIDC configured: issuer={oidc_config.issuer}")
     else:
@@ -72,6 +75,7 @@ async def lifespan(app: Litestar) -> AsyncGenerator[None, None]:
         game_loop_manager = None
         signaling_manager = None
         oidc_config = None
+        elo_manager = None
         await pool.aclose()
         room_manager = None
         print("[redis] Connection closed")
@@ -1179,6 +1183,85 @@ async def auth_me(request: Request) -> dict[str, Any]:
 
 
 # ─────────────────────────────────────────────
+# ELO / Leaderboard
+# ─────────────────────────────────────────────
+
+
+@get("/api/leaderboard")
+async def leaderboard(request: Request) -> dict[str, Any]:
+    """Get the global leaderboard sorted by ELO.
+
+    Query params:
+        category: 'voice', 'keyboard', or 'all' (default: 'all')
+        limit: max entries (default: 50)
+    """
+    if elo_manager is None:
+        raise HTTPException(status_code=503, detail="ELO manager not available")
+
+    category = request.query_params.get("category", "all")
+    limit_str = request.query_params.get("limit", "50")
+    try:
+        limit = min(int(limit_str), 100)
+    except ValueError:
+        limit = 50
+
+    if category == "all":
+        # Merge voice + keyboard leaderboards, de-duplicate by user_id (take highest)
+        voice_entries = await elo_manager.get_leaderboard("voice", limit=limit)
+        keyboard_entries = await elo_manager.get_leaderboard("keyboard", limit=limit)
+
+        # Merge: for each user, take their best rating across categories
+        seen: dict[str, dict[str, Any]] = {}
+        for entry in voice_entries + keyboard_entries:
+            uid = str(entry["user_id"])
+            if uid not in seen or float(entry["rating"]) > float(seen[uid]["rating"]):
+                seen[uid] = {**entry, "input_mode": "voice" if entry in voice_entries else "keyboard"}
+
+        merged = sorted(seen.values(), key=lambda e: float(e["rating"]), reverse=True)[:limit]
+        # Re-rank
+        for i, entry in enumerate(merged):
+            entry["rank"] = i + 1
+
+        return {"category": "all", "entries": merged}
+
+    if category not in ("voice", "keyboard"):
+        raise HTTPException(status_code=400, detail="category must be 'voice', 'keyboard', or 'all'")
+
+    entries = await elo_manager.get_leaderboard(category, limit=limit)
+    # Add input_mode badge
+    for entry in entries:
+        entry["input_mode"] = category
+
+    return {"category": category, "entries": entries}
+
+
+@get("/api/elo/{user_id:str}")
+async def get_elo(user_id: str, request: Request) -> dict[str, Any]:
+    """Get a player's ELO rating for a specific category or all categories."""
+    if elo_manager is None:
+        raise HTTPException(status_code=503, detail="ELO manager not available")
+
+    category = request.query_params.get("category", "")
+
+    if category and category in ("voice", "keyboard"):
+        stats = await elo_manager.get_rating(user_id, category)
+        rank = await elo_manager.get_player_rank(user_id, category)
+        return {**stats, "rank": rank}
+
+    # Return both categories
+    voice = await elo_manager.get_rating(user_id, "voice")
+    keyboard = await elo_manager.get_rating(user_id, "keyboard")
+    voice_rank = await elo_manager.get_player_rank(user_id, "voice")
+    keyboard_rank = await elo_manager.get_player_rank(user_id, "keyboard")
+
+    return {
+        "user_id": user_id,
+        "voice": {**voice, "rank": voice_rank},
+        "keyboard": {**keyboard, "rank": keyboard_rank},
+    }
+
+
+# ─────────────────────────────────────────────
 # App
 # ─────────────────────────────────────────────
 
@@ -1211,6 +1294,8 @@ app = Litestar(
         twilio_stream,
         phone_close,
         game_ws,
+        leaderboard,
+        get_elo,
         create_static_files_router(path="/src", directories=[ROOT / "src"]),
         create_static_files_router(path="/assets", directories=[ROOT / "assets"]),
     ],
