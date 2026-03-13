@@ -8,6 +8,7 @@ import { SimulatedAdapter } from './simulated.js';
 import { LLMAdapter } from './llm.js';
 import { parseRoute } from './router.js';
 import { isAuthConfigured, login, logout, handleCallback, checkAuth, isLoggedIn, getUser } from './auth.js';
+import { PeerConnection, RemoteInputAdapter } from './webrtc.js';
 
 const canvas = document.getElementById('game');
 
@@ -65,6 +66,8 @@ let p2Input = null;
 const sfx = new SFX();
 // Track active adapters for cleanup
 let activeAdapters = [];
+// Track active peer connection for multiplayer cleanup
+let peerConnection = null;
 
 /** Show a screen by name, hiding all others */
 function showScreen(name) {
@@ -121,9 +124,19 @@ async function cleanupAdapters() {
 function showOnboarding() {
   if (game) { game.running = false; game = null; }
   cleanupAdapters();
+  if (peerConnection) { peerConnection.close(); peerConnection = null; }
   p1Input = null;
   p2Input = null;
   showScreen('onboarding');
+}
+
+function showLanding() {
+  if (game) { game.running = false; game = null; }
+  cleanupAdapters();
+  if (peerConnection) { peerConnection.close(); peerConnection = null; }
+  p1Input = null;
+  p2Input = null;
+  showScreen('landing');
 }
 
 async function startFight() {
@@ -467,6 +480,8 @@ document.getElementById('btn-ctrl-back').addEventListener('click', () => {
 /** Start a multiplayer fight using the locally selected controller */
 function startMultiplayerFight(_roomData) {
   const myNum = parseInt(localStorage.getItem('sf_playerNum') || '1', 10);
+  const roomCode = localStorage.getItem('sf_roomCode');
+  const playerId = localStorage.getItem('sf_playerId');
 
   state = 'fighting';
   for (const el of Object.values(screens)) el.classList.add('hidden');
@@ -476,8 +491,11 @@ function startMultiplayerFight(_roomData) {
   // Create input for local player based on room controller selection
   const localInput = createInput(myNum, roomModeIdx, roomProviderIdx);
 
-  // Remote player gets a no-op InputManager (networking wired in US-012)
+  // Remote player gets an InputManager with a RemoteInputAdapter
+  // that receives inputs from the peer via WebRTC data channel
   const remoteInput = new InputManager();
+  const remoteAdapter = new RemoteInputAdapter();
+  remoteInput.addAdapter(remoteAdapter);
 
   const myInput = myNum === 1 ? localInput : remoteInput;
   const opInput = myNum === 1 ? remoteInput : localInput;
@@ -502,6 +520,36 @@ function startMultiplayerFight(_roomData) {
   }
 
   window._game = game;
+
+  // Establish WebRTC peer connection + game WebSocket
+  if (roomCode && playerId) {
+    peerConnection = new PeerConnection(roomCode, playerId, myNum);
+
+    // Feed remote peer inputs into the RemoteInputAdapter
+    peerConnection.onRemoteInput((msg) => {
+      remoteAdapter.receiveInput(msg);
+    });
+
+    // Handle authoritative server state (used by US-009 reconciliation)
+    peerConnection.onServerState((msg) => {
+      if (msg.type === 'round_over' && game) {
+        game.roundOver = true;
+      }
+    });
+
+    peerConnection.connect();
+
+    // Tap into localInput.endFrame to send inputs before justPressed is cleared.
+    // This captures the exact actions the game loop just consumed.
+    const origEndFrame = localInput.endFrame.bind(localInput);
+    localInput.endFrame = () => {
+      if (peerConnection) {
+        peerConnection.sendInput(localInput.getActions(), localInput.getJustPressed());
+      }
+      origEndFrame();
+    };
+  }
+
   Promise.all(readyPromises).then(() => game.showFightAlert());
 }
 

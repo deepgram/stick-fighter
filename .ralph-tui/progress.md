@@ -19,6 +19,8 @@ after each iteration and it's included in prompts for context.
 - **TestClient + global state**: Litestar's `TestClient` runs the app lifespan on `__enter__()`, which sets globals like `room_manager`. To test endpoints with fakeredis, inject the mock *after* `with TestClient(app=app) as client:` — not before — or the lifespan will overwrite it.
 - **fakeredis shared server for sync+async**: Use `fakeredis.FakeServer()` shared between sync `FakeRedis` and async `FakeRedis(server=...)` to manipulate test data from sync code without event loop conflicts. Essential when sync tests need to set up room state (e.g., joining P2) before hitting endpoints.
 - **Signaling pattern**: `signaling.py` manages in-memory signal sessions per room. POST `/api/room/signal` relays SDP/ICE to peer via SSE. GET `/api/room/signal/listen` delivers signals. GET `/api/rtc/config` returns STUN/TURN config. Player identity validated against Redis room hash (`p1_id`/`p2_id`).
+- **WebRTC data channel pattern**: `src/webrtc.js` has `PeerConnection` (manages RTCPeerConnection + game WebSocket + signaling SSE) and `RemoteInputAdapter` (standard InputAdapter interface for remote peer inputs). P1 creates offer + data channel, P2 answers. Inputs sent to both peer (data channel) and server (WebSocket). Fallback to WS-only if WebRTC fails after 3 reconnect attempts.
+- **Input send timing**: Tap into `localInput.endFrame()` to capture actions/justPressed before they're cleared — this is when the game loop has just consumed them. Avoids modifying the Game class.
 
 ---
 
@@ -246,4 +248,26 @@ after each iteration and it's included in prompts for context.
   - `_resolve_player_num` helper (from signaling) reuses well for any endpoint that needs to validate player identity against a room
   - The multiplayer fight start needs a placeholder InputManager for the remote player — networking comes in US-008/US-012
   - Auto-transitioning room status on join (inside the join endpoint) keeps the client logic simpler — P2 immediately knows it's time to select controllers
+---
+
+## 2026-03-13 - stick-fighter-d4c.10
+- Implemented WebRTC data channel for peer-to-peer input exchange
+- `PeerConnection` class: manages RTCPeerConnection, data channel, game WebSocket, and signaling SSE
+- `RemoteInputAdapter`: standard InputAdapter that receives inputs from remote peer via data channel
+- Signaling flow: P1 creates offer + data channel → P2 answers via `/api/room/signal` relay
+- Dual-send: every frame, local inputs go to peer (data channel, low latency) AND server (WebSocket, authoritative)
+- Data channel config: `ordered: false`, `maxRetransmits: 0` for UDP-like low-latency behavior
+- Auto-reconnect on data channel drop (3 attempts, 2s delay), then fallback to server-only relay
+- Fallback mode: WebRTC resources cleaned up, inputs only go via game WebSocket
+- Wired into `startMultiplayerFight()` in main.js: creates PeerConnection, RemoteInputAdapter on remote InputManager, taps endFrame for input sending
+- 32 new Jest tests covering: RemoteInputAdapter (7), PeerConnection constructor/WS/sendInput/signaling P1+P2/ICE/data channel events/reconnect/fallback/close/channel config (25)
+- Files changed:
+  - `src/webrtc.js` — New: PeerConnection class, RemoteInputAdapter class
+  - `src/main.js` — Added webrtc imports, peerConnection tracking, showLanding helper, wired PeerConnection + RemoteInputAdapter into startMultiplayerFight, endFrame tap for input sending, cleanup on fight end
+  - `tests/webrtc.test.js` — New: 32 tests across 10 describe blocks with full browser API mocks
+- **Learnings:**
+  - `_enterFallback()` must guard `_handleDisconnect()` against re-entry — closing the data channel fires `onclose` which calls `_handleDisconnect()`, causing infinite recursion without `if (this.fallbackMode) return`
+  - MockWebSocket's `setTimeout` for auto-`onopen` causes Jest "Cannot log after tests" warnings — use `Promise.resolve().then()` instead for microtask timing
+  - `endFrame()` interception is the cleanest way to capture inputs at exactly the right time — after the game consumed them, before `justPressed` is cleared — without modifying the Game class
+  - WebRTC data channels with `ordered: false` + `maxRetransmits: 0` are ideal for fighting game inputs — stale input frames are useless, latest state matters most
 ---
