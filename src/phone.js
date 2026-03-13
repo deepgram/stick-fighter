@@ -44,6 +44,7 @@ export class PhoneAdapter {
     const { sessionId, phoneNumber } = await resp.json();
     this.sessionId = sessionId;
     this.phoneNumber = phoneNumber;
+    this._updatePhoneDisplay();
     console.log(`[Phone P${this.player}] Allocated ${phoneNumber}`);
 
     // 2. Connect SSE for transcript events
@@ -62,9 +63,7 @@ export class PhoneAdapter {
       console.error(`[Phone P${this.player}] SSE error`, e);
     };
 
-    // Ready immediately — game starts, phone number displayed, fighter idles until call
-    this.ready = true;
-    if (this._readyResolve) { this._readyResolve(); this._readyResolve = null; }
+    // Not ready yet — wait until the caller actually connects via Twilio
   }
 
   _handleSSEMessage(data) {
@@ -74,6 +73,10 @@ export class PhoneAdapter {
       console.log(`[Phone P${this.player}] Call connected!`);
       this._callConnected = true;
       this._updatePhoneDisplay();
+      if (!this.ready) {
+        this.ready = true;
+        if (this._readyResolve) { this._readyResolve(); this._readyResolve = null; }
+      }
     } else if (data.type === 'call_disconnected') {
       console.log(`[Phone P${this.player}] Call disconnected`);
       this._callConnected = false;

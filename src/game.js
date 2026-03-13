@@ -72,7 +72,7 @@ export class Game {
     const logicalW = canvas.width / this.dpr;
     const logicalH = canvas.height / this.dpr;
 
-    const floorY = logicalH - 80;
+    const floorY = logicalH - 160;
     const stageLeft = logicalW * STAGE_MARGIN;
     const stageRight = logicalW * (1 - STAGE_MARGIN);
     const startOffset = (stageRight - stageLeft) * 0.25;
@@ -122,7 +122,7 @@ export class Game {
     return this.logicalW * (1 - STAGE_MARGIN);
   }
   get floorY() {
-    return this.logicalH - 80;
+    return this.logicalH - 160;
   }
 
   start() {
@@ -529,18 +529,19 @@ Distance: ${Math.round(dist)}px | Timer: ${Math.ceil(this.roundTimer)}s`;
       this._p2Latch,
       dt,
     );
-    this._drawController(ctx, P1_CONTROLLER, 30, h - 130, p1Visual, DG.primary);
+    const ctrlY = this.floorY + 24;
+    this._drawController(ctx, P1_CONTROLLER, 30, ctrlY, p1Visual, DG.primary);
     this._drawController(
       ctx,
       P2_CONTROLLER,
-      w - 190,
-      h - 130,
+      w - 200,
+      ctrlY,
       p2Visual,
       DG.secondary,
     );
 
     // Damage log between controllers
-    this._drawDamageLog(ctx, w, h);
+    this._drawDamageLog(ctx, w, this.floorY + 160);
 
     // Phone number display — shown until call connects
     this._drawPhoneInfo(ctx, w, h);
@@ -553,7 +554,7 @@ Distance: ${Math.round(dist)}px | Timer: ${Math.ceil(this.roundTimer)}s`;
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
       ctx.fillStyle = DG.slate;
-      ctx.fillText("Connecting...", w / 2, h / 2);
+      ctx.fillText("Connecting...", w / 2, this.floorY / 2);
       ctx.restore();
     }
 
@@ -817,38 +818,34 @@ Distance: ${Math.round(dist)}px | Timer: ${Math.ceil(this.roundTimer)}s`;
   // ─────────────────────────────────────────
   _drawPhoneInfo(ctx, w, h) {
     const infos = [
-      { info: this.p1PhoneInfo, color: DG.primary, label: 'P1' },
-      { info: this.p2PhoneInfo, color: DG.secondary, label: 'P2' },
+      { info: this.p1PhoneInfo, color: DG.primary, label: 'P1', x: w * 0.25 },
+      { info: this.p2PhoneInfo, color: DG.secondary, label: 'P2', x: w * 0.75 },
     ];
 
-    let yOffset = 0;
-    for (const { info, color, label } of infos) {
+    for (const { info, color, label, x } of infos) {
       if (!info) continue;
 
       ctx.save();
-      const y = h / 2 + 30 + yOffset;
+      const y = h / 2 + 30;
 
       if (info.connected) {
-        // Brief "CONNECTED" flash
         ctx.globalAlpha = 0.5;
         ctx.font = 'bold 14px monospace';
         ctx.textAlign = 'center';
         ctx.fillStyle = color;
-        ctx.fillText(`${label} PHONE CONNECTED`, w / 2, y);
+        ctx.fillText('CONNECTED', x, y);
       } else {
-        // Show phone number prominently
         ctx.globalAlpha = 0.7 + Math.sin(performance.now() / 400) * 0.2;
         ctx.font = 'bold 12px monospace';
         ctx.textAlign = 'center';
         ctx.fillStyle = DG.slate;
-        ctx.fillText(`${label} CALL:`, w / 2, y);
+        ctx.fillText(`${label} CALL:`, x, y);
         ctx.font = 'bold 22px monospace';
         ctx.fillStyle = color;
-        ctx.fillText(info.number, w / 2, y + 24);
+        ctx.fillText(info.number || '...', x, y + 24);
       }
 
       ctx.restore();
-      yOffset += info.connected ? 24 : 52;
     }
   }
 
@@ -857,7 +854,6 @@ Distance: ${Math.round(dist)}px | Timer: ${Math.ceil(this.roundTimer)}s`;
   // ─────────────────────────────────────────
   _drawController(ctx, layout, x, y, activeActions, playerColor) {
     ctx.save();
-    ctx.globalAlpha = 0.3;
 
     const btnSize = 18;
     const btnGap = 22;
@@ -866,77 +862,154 @@ Distance: ${Math.round(dist)}px | Timer: ${Math.ceil(this.roundTimer)}s`;
     const faceX = x + 130;
     const faceY = y + 30;
 
-    // D-pad
+    // Controller shell — SVG-based SNES outline, solid knockout background
+    // SVG body path from svgrepo SNES controller (viewBox 0 0 76 76)
+    // Left lobe center: (23.75, 39.58), Right lobe center: (50.67, 39.58)
+    const svgLx = 23.75, svgRx = 50.6667, svgCy = 39.5833;
+    const scale = (faceX - dpadX) / (svgRx - svgLx);
+    const tx = dpadX - svgLx * scale;
+    const ty = dpadY - svgCy * scale;
+
+    ctx.save();
+    ctx.translate(tx, ty);
+    ctx.scale(scale, scale);
+
+    const body = new Path2D(
+      "M 23.75,49.0833C 18.5033,49.0833 14.25,44.83 14.25,39.5833" +
+      "C 14.25,34.3366 18.5033,30.0833 23.75,30.0833L 50.6667,30.0833" +
+      "C 55.9134,30.0833 60.1667,34.3366 60.1667,39.5833" +
+      "C 60.1667,44.83 55.9134,49.0833 50.6667,49.0833" +
+      "C 47.8531,49.0833 45.3252,47.8602 43.5857,45.9167" +
+      "L 30.831,45.9167C 29.0915,47.8602 26.5636,49.0833 23.75,49.0833Z",
+    );
+
+    // Solid knockout fill — completely covers background
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = DG.bg;
+    ctx.fill(body);
+
+    // Tinted overlay on top
+    ctx.globalAlpha = 0.15;
+    ctx.fillStyle = DG.charcoal;
+    ctx.fill(body);
+
+    // Border
+    ctx.globalAlpha = 0.3;
+    ctx.strokeStyle = playerColor;
+    ctx.lineWidth = 1 / scale;
+    ctx.stroke(body);
+
+    // D-pad recess circle
+    const recess = new Path2D(
+      "M 23.75,33.25C 20.2522,33.25 17.4166,36.0856 17.4166,39.5834" +
+      "C 17.4166,43.0812 20.2522,45.9167 23.75,45.9167" +
+      "C 27.2478,45.9167 30.0833,43.0812 30.0833,39.5834" +
+      "C 30.0833,36.0856 27.2478,33.25 23.75,33.25Z",
+    );
+    ctx.globalAlpha = 0.06;
+    ctx.fillStyle = playerColor;
+    ctx.fill(recess);
+
+    // Face button recess circle
+    ctx.save();
+    ctx.translate(svgRx - svgLx, 0);
+    ctx.fill(recess);
+    ctx.restore();
+
+    ctx.restore(); // undo scale+translate
+
+    // D-pad — solid knockout per button
     for (const btn of layout.dpad) {
       const bx = dpadX + btn.dx * btnGap;
       const by = dpadY + btn.dy * btnGap;
       const active = activeActions.has(btn.action);
 
-      ctx.fillStyle = active ? playerColor : DG.charcoal;
+      // Solid knockout + button face
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = DG.bg;
       ctx.fillRect(bx - btnSize / 2, by - btnSize / 2, btnSize, btnSize);
+      ctx.globalAlpha = 0.3;
+      ctx.fillStyle = DG.charcoal;
+      ctx.fillRect(bx - btnSize / 2, by - btnSize / 2, btnSize, btnSize);
+
+      // Border — highlights on active
       ctx.strokeStyle = active ? playerColor : DG.pebble;
       ctx.lineWidth = active ? 2 : 1;
       ctx.globalAlpha = active ? 0.8 : 0.3;
       ctx.strokeRect(bx - btnSize / 2, by - btnSize / 2, btnSize, btnSize);
 
-      ctx.globalAlpha = active ? 0.9 : 0.4;
+      // Label
+      ctx.globalAlpha = active ? 0.9 : 0.5;
       ctx.fillStyle = active ? DG.text : DG.slate;
       ctx.font = "10px monospace";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
       ctx.fillText(btn.label, bx, by);
-      ctx.globalAlpha = 0.3;
     }
 
-    // Face buttons (diamond layout)
+    // Face buttons — solid knockout per button
     for (const btn of layout.buttons) {
       const bx = faceX + btn.dx * btnGap;
       const by = faceY + btn.dy * btnGap;
       const active = activeActions.has(btn.action);
       const r = btnSize / 2;
 
+      // Solid knockout + button face
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = DG.bg;
       ctx.beginPath();
       ctx.arc(bx, by, r, 0, Math.PI * 2);
-      ctx.fillStyle = active ? playerColor : DG.charcoal;
       ctx.fill();
+      ctx.globalAlpha = 0.3;
+      ctx.fillStyle = DG.charcoal;
+      ctx.fill();
+
+      // Border — highlights on active
       ctx.strokeStyle = active ? playerColor : DG.pebble;
       ctx.lineWidth = active ? 2 : 1;
       ctx.globalAlpha = active ? 0.8 : 0.3;
       ctx.stroke();
 
-      ctx.globalAlpha = active ? 0.9 : 0.4;
+      // Label
+      ctx.globalAlpha = active ? 0.9 : 0.5;
       ctx.fillStyle = active ? DG.text : DG.slate;
       ctx.font = "10px monospace";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
       ctx.fillText(btn.label, bx, by);
-      ctx.globalAlpha = 0.3;
     }
 
-    // Shoulder buttons
+    // Shoulder buttons — solid knockout
     for (const btn of layout.shoulders) {
-      const sx = btn.side === "left" ? x + 10 : x + 110;
-      const sy = y - 12;
+      const sx = btn.side === "left" ? dpadX - 20 : faceX - 20;
+      const sy = y - 14;
       const sw = 40;
       const sh = 14;
       const active = activeActions.has(btn.action);
 
-      ctx.fillStyle = active ? playerColor : DG.charcoal;
+      // Solid knockout + button face
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = DG.bg;
       ctx.beginPath();
       ctx.roundRect(sx, sy, sw, sh, 4);
       ctx.fill();
+      ctx.globalAlpha = 0.3;
+      ctx.fillStyle = DG.charcoal;
+      ctx.fill();
+
+      // Border — highlights on active
       ctx.strokeStyle = active ? playerColor : DG.pebble;
       ctx.lineWidth = active ? 2 : 1;
       ctx.globalAlpha = active ? 0.8 : 0.3;
       ctx.stroke();
 
-      ctx.globalAlpha = active ? 0.9 : 0.4;
+      // Label
+      ctx.globalAlpha = active ? 0.9 : 0.5;
       ctx.fillStyle = active ? DG.text : DG.slate;
       ctx.font = "9px monospace";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
       ctx.fillText(btn.label, sx + sw / 2, sy + sh / 2);
-      ctx.globalAlpha = 0.3;
     }
 
     ctx.restore();

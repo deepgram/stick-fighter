@@ -236,6 +236,184 @@
       font-size: 11px;
       color: var(--dg-pebble);
     }
+
+    /* ── Landing screen ── */
+    .landing {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 32px;
+      padding: 20px;
+    }
+    .landing.hidden { display: none; }
+
+    .path-cards {
+      display: flex;
+      gap: 24px;
+    }
+
+    .path-card {
+      font-family: monospace;
+      background: var(--dg-charcoal);
+      border: 2px solid var(--dg-border);
+      border-radius: 8px;
+      padding: 32px 40px;
+      min-width: 260px;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .path-card:hover {
+      transform: translateY(-2px);
+    }
+    .path-card.mp:hover { border-color: var(--dg-primary); }
+    .path-card.sp:hover { border-color: var(--dg-secondary); }
+    .path-card h3 {
+      font-size: 20px;
+      font-weight: bold;
+      margin-bottom: 8px;
+    }
+    .path-card.mp h3 { color: var(--dg-primary); }
+    .path-card.sp h3 { color: var(--dg-secondary); }
+    .path-card p {
+      font-size: 12px;
+      color: var(--dg-slate);
+      margin-bottom: 12px;
+    }
+    .path-sub {
+      font-size: 10px;
+      color: var(--dg-pebble);
+    }
+
+    /* ── Multiplayer menu ── */
+    .multiplayer-menu {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 24px;
+      padding: 20px;
+    }
+    .multiplayer-menu.hidden { display: none; }
+
+    .mp-options {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      min-width: 340px;
+    }
+
+    .mp-option {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      background: var(--dg-charcoal);
+      border: 1px solid var(--dg-border);
+      border-radius: 8px;
+      padding: 16px 24px;
+      cursor: pointer;
+      transition: all 0.15s;
+      font-family: monospace;
+      color: var(--dg-text);
+      text-align: left;
+    }
+    .mp-option:hover {
+      border-color: var(--dg-primary);
+      background: rgba(19, 239, 149, 0.05);
+    }
+    .mp-icon {
+      font-size: 20px;
+      width: 32px;
+      text-align: center;
+      color: var(--dg-primary);
+    }
+    .mp-text {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    .mp-label {
+      font-size: 14px;
+      font-weight: bold;
+    }
+    .mp-desc {
+      font-size: 10px;
+      color: var(--dg-pebble);
+    }
+
+    .back-btn {
+      font-family: monospace;
+      font-size: 12px;
+      color: var(--dg-pebble);
+      background: none;
+      border: none;
+      cursor: pointer;
+      padding: 8px 16px;
+      transition: color 0.15s;
+    }
+    .back-btn:hover { color: var(--dg-text); }
+
+    /* ── Join room screen ── */
+    .join-room {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 20px;
+      padding: 20px;
+    }
+    .join-room.hidden { display: none; }
+
+    .join-hint {
+      font-size: 12px;
+      color: var(--dg-slate);
+    }
+
+    .room-code-input {
+      font-family: monospace;
+      font-size: 20px;
+      text-align: center;
+      padding: 12px 24px;
+      background: var(--dg-almost-blk);
+      border: 2px solid var(--dg-border);
+      border-radius: 8px;
+      color: var(--dg-text);
+      width: 320px;
+      letter-spacing: 2px;
+    }
+    .room-code-input:focus {
+      outline: none;
+      border-color: var(--dg-primary);
+    }
+    .room-code-input::placeholder {
+      color: var(--dg-pebble);
+      letter-spacing: 0;
+      font-size: 14px;
+    }
+
+    .join-btn {
+      font-family: monospace;
+      font-size: 14px;
+      font-weight: bold;
+      padding: 10px 32px;
+      border-radius: 6px;
+      border: 2px solid var(--dg-primary);
+      background: rgba(19, 239, 149, 0.1);
+      color: var(--dg-primary);
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .join-btn:hover:not(:disabled) {
+      background: rgba(19, 239, 149, 0.2);
+    }
+    .join-btn:disabled {
+      opacity: 0.3;
+      cursor: not-allowed;
+    }
   </style>
 </head>
 <body>
@@ -245,8 +423,64 @@
     <h1>STICK FIGHTER</h1>
   </div>
 
-  <!-- Onboarding screen -->
-  <div class="onboarding" id="onboarding">
+  <!-- Landing screen — mode selection -->
+  <div class="landing" id="landing">
+    <h2>SELECT MODE</h2>
+    <div class="path-cards">
+      <button class="path-card mp" id="btn-multiplayer">
+        <h3>MULTIPLAYER</h3>
+        <p>Fight other players online</p>
+        <span class="path-sub">Create or join a room</span>
+      </button>
+      <button class="path-card sp" id="btn-singleplayer">
+        <h3>SINGLE PLAYER</h3>
+        <p>Fight AI opponents locally</p>
+        <span class="path-sub">Keyboard, Voice, Phone, or AI</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- Multiplayer menu -->
+  <div class="multiplayer-menu hidden" id="multiplayer-menu">
+    <h2>MULTIPLAYER</h2>
+    <div class="mp-options">
+      <button class="mp-option" id="btn-create-room">
+        <span class="mp-icon">＋</span>
+        <div class="mp-text">
+          <span class="mp-label">Create Room</span>
+          <span class="mp-desc">Get a shareable room code</span>
+        </div>
+      </button>
+      <button class="mp-option" id="btn-join-room">
+        <span class="mp-icon">→</span>
+        <div class="mp-text">
+          <span class="mp-label">Join Room</span>
+          <span class="mp-desc">Enter a room code to join</span>
+        </div>
+      </button>
+      <button class="mp-option" id="btn-matchmaking">
+        <span class="mp-icon">⚔</span>
+        <div class="mp-text">
+          <span class="mp-label">Matchmaking</span>
+          <span class="mp-desc">Find an ELO-matched opponent</span>
+        </div>
+      </button>
+    </div>
+    <button class="back-btn" id="btn-mp-back">← BACK</button>
+  </div>
+
+  <!-- Join room screen -->
+  <div class="join-room hidden" id="join-room">
+    <h2>JOIN ROOM</h2>
+    <p class="join-hint">Enter the 3-word room code</p>
+    <input type="text" class="room-code-input" id="room-code-input"
+      placeholder="red-tiger-paw" autocomplete="off" spellcheck="false">
+    <button class="join-btn" id="btn-join-go" disabled>JOIN</button>
+    <button class="back-btn" id="btn-join-back">← BACK</button>
+  </div>
+
+  <!-- Onboarding screen (single-player fighter selection) -->
+  <div class="onboarding hidden" id="onboarding">
     <h2>SELECT FIGHTERS</h2>
 
     <div class="players">
@@ -290,6 +524,6 @@
   <!-- Game canvas -->
   <canvas id="game"></canvas>
 
-  <script type="module" src="./src/main.js"></script>
+  <script type="module" src="/src/main.js"></script>
 </body>
 </html>

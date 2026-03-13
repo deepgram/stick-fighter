@@ -310,7 +310,7 @@ async def _llm_anthropic(messages: list[dict]) -> str:
         raise HTTPException(status_code=502, detail="Anthropic request failed")
 
     result = resp.json()
-    print(f"[llm-fighter:anthropic] ─── RESPONSE ───")
+    print("[llm-fighter:anthropic] ─── RESPONSE ───")
     print(f"[llm-fighter:anthropic] model: {result.get('model')}")
     print(f"[llm-fighter:anthropic] usage: in={result.get('usage', {}).get('input_tokens')} out={result.get('usage', {}).get('output_tokens')}")
     print(f"[llm-fighter:anthropic] stop: {result.get('stop_reason')}")
@@ -351,7 +351,7 @@ async def _llm_openai(messages: list[dict]) -> str:
         raise HTTPException(status_code=502, detail="OpenAI request failed")
 
     result = resp.json()
-    print(f"[llm-fighter:openai] ─── RESPONSE ───")
+    print("[llm-fighter:openai] ─── RESPONSE ───")
     print(f"[llm-fighter:openai] model: {result.get('model')}")
     usage = result.get("usage", {})
     print(f"[llm-fighter:openai] usage: in={usage.get('prompt_tokens')} out={usage.get('completion_tokens')}")
@@ -484,8 +484,20 @@ async def send_sse(session: LLMSession, data: Any) -> None:
 # Routes
 # ─────────────────────────────────────────────
 
+@get("/health")
+async def health() -> dict:
+    return {"status": "ok"}
+
+
 @get("/")
 async def index_route() -> Response:
+    html = (ROOT / "index.html").read_text()
+    return Response(content=html, media_type="text/html")
+
+
+@get("/room/{code:str}")
+async def room_route(code: str) -> Response:
+    """Serve the game page for a room join link (JS reads the URL to detect the room code)."""
     html = (ROOT / "index.html").read_text()
     return Response(content=html, media_type="text/html")
 
@@ -754,7 +766,9 @@ async def phone_close(data: dict[str, Any]) -> dict:
 
 app = Litestar(
     route_handlers=[
+        health,
         index_route,
+        room_route,
         stt_proxy,
         llm_command,
         voice_llm,

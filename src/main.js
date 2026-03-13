@@ -6,9 +6,17 @@ import { VoiceAdapter } from './voice.js';
 import { PhoneAdapter } from './phone.js';
 import { SimulatedAdapter } from './simulated.js';
 import { LLMAdapter } from './llm.js';
+import { parseRoute } from './router.js';
 
 const canvas = document.getElementById('game');
-const onboarding = document.getElementById('onboarding');
+
+// Screen elements
+const screens = {
+  landing: document.getElementById('landing'),
+  multiplayer: document.getElementById('multiplayer-menu'),
+  joinRoom: document.getElementById('join-room'),
+  onboarding: document.getElementById('onboarding'),
+};
 
 // Hi-DPI setup
 const dpr = window.devicePixelRatio || 1;
@@ -45,15 +53,27 @@ updateModeSelection(1, p1ModeIdx, p1ProviderIdx);
 updateModeSelection(2, p2ModeIdx, p2ProviderIdx);
 
 // ─────────────────────────────────────────────
-// App state
+// App state & screen navigation
 // ─────────────────────────────────────────────
-let state = 'onboarding';
+let state = 'landing';
 let game = null;
 let p1Input = null;
 let p2Input = null;
 const sfx = new SFX();
 // Track active adapters for cleanup
 let activeAdapters = [];
+
+/** Show a screen by name, hiding all others */
+function showScreen(name) {
+  for (const el of Object.values(screens)) {
+    el.classList.add('hidden');
+  }
+  canvas.classList.remove('active');
+  if (screens[name]) {
+    screens[name].classList.remove('hidden');
+  }
+  state = name;
+}
 
 /** Create an InputManager with the right adapter for a mode */
 function createInput(playerNum, modeIdx, providerIdx) {
@@ -96,18 +116,16 @@ async function cleanupAdapters() {
 }
 
 function showOnboarding() {
-  state = 'onboarding';
   if (game) { game.running = false; game = null; }
   cleanupAdapters();
   p1Input = null;
   p2Input = null;
-  onboarding.classList.remove('hidden');
-  canvas.classList.remove('active');
+  showScreen('onboarding');
 }
 
 async function startFight() {
   state = 'fighting';
-  onboarding.classList.add('hidden');
+  screens.onboarding.classList.add('hidden');
   canvas.classList.add('active');
   resize();
 
@@ -140,7 +158,48 @@ async function startFight() {
 }
 
 // ─────────────────────────────────────────────
-// Click handlers for mode pills
+// Landing page click handlers
+// ─────────────────────────────────────────────
+document.getElementById('btn-multiplayer').addEventListener('click', () => showScreen('multiplayer'));
+document.getElementById('btn-singleplayer').addEventListener('click', () => showScreen('onboarding'));
+
+// Multiplayer menu
+document.getElementById('btn-create-room').addEventListener('click', () => {
+  // Placeholder — wired up in US-002
+  console.log('[multiplayer] Create room — not yet implemented');
+});
+document.getElementById('btn-join-room').addEventListener('click', () => showScreen('joinRoom'));
+document.getElementById('btn-matchmaking').addEventListener('click', () => {
+  // Placeholder — wired up in US-015
+  console.log('[multiplayer] Matchmaking — not yet implemented');
+});
+document.getElementById('btn-mp-back').addEventListener('click', () => showScreen('landing'));
+
+// Join room
+const roomCodeInput = document.getElementById('room-code-input');
+const joinGoBtn = document.getElementById('btn-join-go');
+
+roomCodeInput.addEventListener('input', () => {
+  // Enable join button when input has a plausible room code
+  joinGoBtn.disabled = roomCodeInput.value.trim().length < 3;
+});
+
+joinGoBtn.addEventListener('click', () => {
+  const code = roomCodeInput.value.trim().toLowerCase();
+  if (code) {
+    // Placeholder — wired up in US-003
+    console.log(`[multiplayer] Join room "${code}" — not yet implemented`);
+  }
+});
+
+document.getElementById('btn-join-back').addEventListener('click', () => {
+  roomCodeInput.value = '';
+  joinGoBtn.disabled = true;
+  showScreen('multiplayer');
+});
+
+// ─────────────────────────────────────────────
+// Click handlers for mode pills (onboarding)
 // ─────────────────────────────────────────────
 document.querySelectorAll('.mode-pills').forEach(container => {
   const player = parseInt(container.dataset.player, 10);
@@ -164,7 +223,7 @@ document.querySelectorAll('.mode-pills').forEach(container => {
 // ─────────────────────────────────────────────
 // Click handlers for LLM provider pills (delegated)
 // ─────────────────────────────────────────────
-onboarding.addEventListener('click', e => {
+screens.onboarding.addEventListener('click', e => {
   const pill = e.target.closest('.provider-pill');
   if (!pill) return;
   const container = pill.closest('.provider-pills');
@@ -214,4 +273,23 @@ window.addEventListener('keydown', e => {
       showOnboarding();
     }
   }
+
+  // Escape goes back from any sub-screen
+  if (e.code === 'Escape') {
+    if (state === 'multiplayer') showScreen('landing');
+    else if (state === 'joinRoom') showScreen('multiplayer');
+    else if (state === 'onboarding') showScreen('landing');
+  }
 });
+
+// ─────────────────────────────────────────────
+// URL routing — detect /room/:code on load
+// ─────────────────────────────────────────────
+const route = parseRoute();
+if (route.type === 'room') {
+  showScreen('joinRoom');
+  roomCodeInput.value = route.code;
+  joinGoBtn.disabled = false;
+} else {
+  showScreen('landing');
+}
