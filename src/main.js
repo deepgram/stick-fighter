@@ -1,7 +1,7 @@
 import { InputManager, KeyboardAdapter, P1_KEYBOARD_MAP, P2_KEYBOARD_MAP } from './input.js';
 import { Game } from './game.js';
 import { SFX } from './sfx.js';
-import { INPUT_MODES, LLM_PROVIDERS, updateModeSelection, getPlayerLabel } from './ui.js';
+import { INPUT_MODES, LLM_PROVIDERS, updateModeSelection, updateControlsInfo, getPlayerLabel } from './ui.js';
 import { VoiceAdapter } from './voice.js';
 import { PhoneAdapter } from './phone.js';
 import { SimulatedAdapter } from './simulated.js';
@@ -17,6 +17,7 @@ const screens = {
   multiplayer: document.getElementById('multiplayer-menu'),
   joinRoom: document.getElementById('join-room'),
   roomLobby: document.getElementById('room-lobby'),
+  roomController: document.getElementById('room-controller'),
   onboarding: document.getElementById('onboarding'),
 };
 
@@ -183,6 +184,7 @@ document.getElementById('btn-create-room').addEventListener('click', async () =>
     document.getElementById('room-url-row').classList.remove('hidden');
     document.getElementById('room-waiting-text').textContent = 'Waiting for opponent...';
     showScreen('roomLobby');
+    startRoomPolling(); // Poll until P2 joins → status becomes "selecting"
   } catch (err) {
     console.error('[multiplayer] Failed to create room:', err);
   }
@@ -230,13 +232,9 @@ async function joinRoom(code) {
     localStorage.setItem('sf_playerId', data.playerId);
     localStorage.setItem('sf_playerNum', data.playerNum);
 
-    // Show lobby in "joined" mode (P2 perspective)
-    document.getElementById('room-lobby-title').textContent = 'ROOM JOINED';
-    document.getElementById('room-lobby-hint').textContent = 'Waiting for both players to select controllers';
-    document.getElementById('room-code-display').textContent = data.code;
-    document.getElementById('room-url-row').classList.add('hidden');
-    document.getElementById('room-waiting-text').textContent = 'Waiting for opponent to be ready...';
-    showScreen('roomLobby');
+    // P2 joins → room is now "selecting" → go straight to controller selection
+    showRoomControllerScreen();
+    startRoomPolling();
   } catch (err) {
     console.error('[multiplayer] Failed to join room:', err);
     joinError.textContent = 'Network error — could not reach server';
@@ -264,7 +262,10 @@ document.getElementById('btn-join-back').addEventListener('click', () => {
 });
 
 // Room lobby
-document.getElementById('btn-lobby-back').addEventListener('click', () => showScreen('multiplayer'));
+document.getElementById('btn-lobby-back').addEventListener('click', () => {
+  stopRoomPolling();
+  showScreen('multiplayer');
+});
 document.getElementById('btn-copy-url').addEventListener('click', () => {
   const url = document.getElementById('room-url-display').value;
   navigator.clipboard.writeText(url).then(() => {
@@ -273,6 +274,236 @@ document.getElementById('btn-copy-url').addEventListener('click', () => {
     setTimeout(() => { btn.textContent = 'COPY'; }, 1500);
   });
 });
+
+// ─────────────────────────────────────────────
+// Room status polling
+// ─────────────────────────────────────────────
+let roomPollTimer = null;
+
+function stopRoomPolling() {
+  if (roomPollTimer) {
+    clearInterval(roomPollTimer);
+    roomPollTimer = null;
+  }
+}
+
+function startRoomPolling() {
+  stopRoomPolling();
+  const code = localStorage.getItem('sf_roomCode');
+  if (!code) return;
+
+  roomPollTimer = setInterval(async () => {
+    try {
+      const resp = await fetch(`/api/room/status?code=${encodeURIComponent(code)}`);
+      if (!resp.ok) {
+        console.warn('[room-poll] Status check failed:', resp.status);
+        return;
+      }
+      const data = await resp.json();
+      handleRoomStatusUpdate(data);
+    } catch (err) {
+      console.warn('[room-poll] Error:', err);
+    }
+  }, 2000);
+}
+
+function handleRoomStatusUpdate(data) {
+  const myNum = localStorage.getItem('sf_playerNum');
+
+  if (data.status === 'selecting' && state === 'roomLobby') {
+    // Both players in room — go to controller selection
+    showRoomControllerScreen();
+  } else if (data.status === 'fighting') {
+    // Both controllers confirmed — start the fight
+    stopRoomPolling();
+    startMultiplayerFight(data);
+  }
+
+  // Update controller status text on room-controller screen
+  if (state === 'roomController') {
+    const statusEl = document.getElementById('room-ctrl-status');
+    const opponentNum = myNum === '1' ? '2' : '1';
+    const opponentReady = data[`p${opponentNum}Ready`];
+    const myReady = data[`p${myNum}Ready`];
+
+    if (myReady && opponentReady) {
+      statusEl.textContent = 'Both ready — starting match!';
+      statusEl.classList.add('ready');
+    } else if (myReady && !opponentReady) {
+      statusEl.textContent = 'Waiting for opponent to select controller...';
+      statusEl.classList.remove('ready');
+    } else if (!myReady && opponentReady) {
+      statusEl.textContent = 'Opponent is ready — pick your controller!';
+      statusEl.classList.remove('ready');
+    } else {
+      statusEl.textContent = 'Both players selecting controllers...';
+      statusEl.classList.remove('ready');
+    }
+  }
+}
+
+// ─────────────────────────────────────────────
+// Room controller selection screen
+// ─────────────────────────────────────────────
+let roomModeIdx = 0;
+let roomProviderIdx = 0;
+
+function showRoomControllerScreen() {
+  const myNum = localStorage.getItem('sf_playerNum') || '1';
+  const card = document.getElementById('room-ctrl-card');
+  const playerLabel = document.getElementById('room-ctrl-player');
+  const confirmBtn = document.getElementById('btn-ctrl-confirm');
+
+  // Style card based on player number
+  card.classList.remove('p1', 'p2');
+  card.classList.add(myNum === '1' ? 'p1' : 'p2');
+  playerLabel.textContent = `PLAYER ${myNum}`;
+
+  // Reset selection
+  roomModeIdx = 0;
+  roomProviderIdx = 0;
+  confirmBtn.disabled = false;
+  confirmBtn.textContent = 'CONFIRM';
+  document.getElementById('room-ctrl-status').textContent = 'Both players selecting controllers...';
+  document.getElementById('room-ctrl-status').classList.remove('ready');
+
+  updateRoomControllerUI();
+  showScreen('roomController');
+}
+
+function updateRoomControllerUI() {
+  // Update pill selection
+  const pills = document.querySelectorAll('#room-ctrl-pills .mode-pill');
+  pills.forEach((pill, i) => {
+    pill.classList.toggle('selected', i === roomModeIdx);
+  });
+
+  // Update controls info using the existing ui.js function
+  // We render into the room-ctrl-info element directly
+  const infoEl = document.getElementById('room-ctrl-info');
+  const mode = INPUT_MODES[roomModeIdx];
+
+  if (mode.id === 'controller') {
+    const myNum = localStorage.getItem('sf_playerNum') || '1';
+    const controls = myNum === '1'
+      ? [{ keys: ['W', 'A', 'S', 'D'], label: 'move' }, { keys: ['U', 'I', 'O'], label: 'punch' }, { keys: ['J', 'K', 'L'], label: 'kick' }]
+      : [{ keys: ['↑', '←', '↓', '→'], label: 'move' }, { keys: ['4', '5', '6'], label: 'punch' }, { keys: ['1', '2', '3'], label: 'kick' }];
+    infoEl.innerHTML = controls.map(row =>
+      `<div class="control-row">${row.keys.map(k => `<kbd>${k}</kbd>`).join(' ')} ${row.label}</div>`
+    ).join('') + `<div class="mode-desc">${mode.desc}</div>`;
+  } else if (mode.id === 'voice') {
+    infoEl.innerHTML = `<div class="voice-info">"punch" "kick" "jump"<br><span>"hard punch" "forward" "back"</span></div><div class="mode-desc">${mode.desc}</div>`;
+  } else if (mode.id === 'phone') {
+    infoEl.innerHTML = `<div class="voice-info">Call a phone number<br><span>Shout commands into the phone</span></div><div class="mode-desc">${mode.desc}</div>`;
+  } else if (mode.id === 'simulated') {
+    infoEl.innerHTML = `<div class="llm-info">Random command bot<br><span>Lightweight, no API key needed</span></div><div class="mode-desc">${mode.desc}</div>`;
+  } else if (mode.id === 'llm') {
+    const provider = LLM_PROVIDERS[roomProviderIdx] || LLM_PROVIDERS[0];
+    const providerPills = LLM_PROVIDERS.map((p, i) =>
+      `<button class="provider-pill${i === roomProviderIdx ? ' selected' : ''}" data-provider="${i}">${p.label}</button>`
+    ).join('');
+    infoEl.innerHTML = `<div class="provider-pills" data-player="room">${providerPills}</div><div class="llm-info">${provider.label} ${provider.model}<br><span>Tactical AI with game awareness</span></div><div class="mode-desc">${mode.desc}</div>`;
+  }
+}
+
+// Mode pill clicks on room controller screen
+document.getElementById('room-ctrl-pills').addEventListener('click', e => {
+  const pill = e.target.closest('.mode-pill');
+  if (!pill) return;
+  roomModeIdx = parseInt(pill.dataset.mode, 10);
+  updateRoomControllerUI();
+});
+
+// LLM provider pill clicks (delegated from room-ctrl-info)
+document.getElementById('room-ctrl-info').addEventListener('click', e => {
+  const pill = e.target.closest('.provider-pill');
+  if (!pill) return;
+  roomProviderIdx = parseInt(pill.dataset.provider, 10);
+  updateRoomControllerUI();
+});
+
+// Confirm controller choice
+document.getElementById('btn-ctrl-confirm').addEventListener('click', async () => {
+  const code = localStorage.getItem('sf_roomCode');
+  const playerId = localStorage.getItem('sf_playerId');
+  const controller = INPUT_MODES[roomModeIdx].id;
+  const confirmBtn = document.getElementById('btn-ctrl-confirm');
+
+  confirmBtn.disabled = true;
+  confirmBtn.textContent = 'CONFIRMED';
+
+  try {
+    const resp = await fetch('/api/room/controller', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code, playerId, controller }),
+    });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      console.error('[room-ctrl] Failed:', err.detail || resp.status);
+      confirmBtn.disabled = false;
+      confirmBtn.textContent = 'CONFIRM';
+      return;
+    }
+
+    const data = await resp.json();
+    if (data.bothReady) {
+      stopRoomPolling();
+      startMultiplayerFight(data);
+    }
+  } catch (err) {
+    console.error('[room-ctrl] Error:', err);
+    confirmBtn.disabled = false;
+    confirmBtn.textContent = 'CONFIRM';
+  }
+});
+
+// Back button on controller screen
+document.getElementById('btn-ctrl-back').addEventListener('click', () => {
+  stopRoomPolling();
+  showScreen('multiplayer');
+});
+
+/** Start a multiplayer fight using the locally selected controller */
+function startMultiplayerFight(_roomData) {
+  const myNum = parseInt(localStorage.getItem('sf_playerNum') || '1', 10);
+
+  state = 'fighting';
+  for (const el of Object.values(screens)) el.classList.add('hidden');
+  canvas.classList.add('active');
+  resize();
+
+  // Create input for local player based on room controller selection
+  const localInput = createInput(myNum, roomModeIdx, roomProviderIdx);
+
+  // Remote player gets a no-op InputManager (networking wired in US-012)
+  const remoteInput = new InputManager();
+
+  const myInput = myNum === 1 ? localInput : remoteInput;
+  const opInput = myNum === 1 ? remoteInput : localInput;
+
+  const myLabel = getPlayerLabel(roomModeIdx, roomProviderIdx);
+  const opLabel = 'Remote';
+
+  const p1Label = myNum === 1 ? myLabel : opLabel;
+  const p2Label = myNum === 1 ? opLabel : myLabel;
+
+  // Preload SFX + adapters
+  const readyPromises = [sfx.preload()];
+  for (const adapter of activeAdapters) {
+    if (adapter.waitUntilReady) readyPromises.push(adapter.waitUntilReady());
+  }
+
+  game = new Game(canvas, myInput, opInput, sfx, { p1Label, p2Label });
+  game.start();
+
+  for (const adapter of activeAdapters) {
+    if (adapter.setGameRef) adapter.setGameRef(game);
+  }
+
+  window._game = game;
+  Promise.all(readyPromises).then(() => game.showFightAlert());
+}
 
 // ─────────────────────────────────────────────
 // Click handlers for mode pills (onboarding)
@@ -354,7 +585,8 @@ window.addEventListener('keydown', e => {
   if (e.code === 'Escape') {
     if (state === 'multiplayer') showScreen('landing');
     else if (state === 'joinRoom') showScreen('multiplayer');
-    else if (state === 'roomLobby') showScreen('multiplayer');
+    else if (state === 'roomLobby') { stopRoomPolling(); showScreen('multiplayer'); }
+    else if (state === 'roomController') { stopRoomPolling(); showScreen('multiplayer'); }
     else if (state === 'onboarding') showScreen('landing');
   }
 });

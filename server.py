@@ -591,10 +591,75 @@ async def room_join(data: dict[str, str]) -> dict[str, str]:
             raise HTTPException(status_code=409, detail=msg)
         raise HTTPException(status_code=400, detail=msg)
 
+    # Transition room to "selecting" now that both players are in
+    await room_manager.transition_status(code, "selecting")
+
     return {
         "code": room["code"],
         "playerId": player_id,
         "playerNum": "2",
+    }
+
+
+@get("/api/room/status")
+async def room_status(code: str) -> dict[str, Any]:
+    """Poll room state. Used by clients to detect opponent join + controller readiness."""
+    if room_manager is None:
+        raise HTTPException(status_code=503, detail="Room manager not available")
+
+    room = await room_manager.get_room(code)
+    if room is None:
+        raise HTTPException(status_code=404, detail="Room not found")
+
+    await room_manager.refresh_ttl(code)
+
+    return {
+        "code": room["code"],
+        "status": room["status"],
+        "p1Controller": room["p1_controller"],
+        "p2Controller": room["p2_controller"],
+        "p1Ready": bool(room["p1_controller"]),
+        "p2Ready": bool(room["p2_controller"]),
+    }
+
+
+VALID_CONTROLLERS = {"controller", "voice", "phone", "simulated", "llm"}
+
+
+@post("/api/room/controller")
+async def room_controller(data: dict[str, str]) -> dict[str, Any]:
+    """Set a player's controller choice. When both are set, transitions to fighting."""
+    if room_manager is None:
+        raise HTTPException(status_code=503, detail="Room manager not available")
+
+    code = data.get("code", "").strip()
+    player_id = data.get("playerId", "").strip()
+    controller = data.get("controller", "").strip()
+
+    if not code or not player_id or not controller:
+        raise HTTPException(status_code=400, detail="code, playerId, and controller are required")
+
+    if controller not in VALID_CONTROLLERS:
+        raise HTTPException(status_code=400, detail=f"Invalid controller: {controller}")
+
+    room = await room_manager.get_room(code)
+    if room is None:
+        raise HTTPException(status_code=404, detail="Room not found")
+
+    player_num = _resolve_player_num(room, player_id)
+
+    room = await room_manager.set_controller(code, player_num, controller)
+
+    # Check if both controllers are set → transition to fighting
+    both_ready = bool(room["p1_controller"]) and bool(room["p2_controller"])
+    if both_ready and room["status"] == "selecting":
+        room = await room_manager.transition_status(code, "fighting")
+
+    return {
+        "status": room["status"],
+        "p1Controller": room["p1_controller"],
+        "p2Controller": room["p2_controller"],
+        "bothReady": both_ready,
     }
 
 
@@ -1278,6 +1343,8 @@ app = Litestar(
         auth_me,
         room_create,
         room_join,
+        room_status,
+        room_controller,
         rtc_config,
         signal_send,
         signal_listen,

@@ -222,3 +222,28 @@ after each iteration and it's included in prompts for context.
   - Redis pipelines guarantee atomicity for multi-key updates without MULTI/EXEC overhead
   - `controller_to_category` utility is exported for use by match flow (US-012) but not imported in server.py yet to avoid ruff F401
 ---
+
+## 2026-03-13 - stick-fighter-d4c.12
+- Implemented controller selection per player in multiplayer rooms
+- POST `/api/room/controller` sets a player's input mode (validated against VALID_CONTROLLERS set)
+- GET `/api/room/status` polls room state (status, controllers, readiness)
+- `room_join` now auto-transitions room status from "waiting" → "selecting" when P2 joins
+- When both controllers confirmed, status transitions from "selecting" → "fighting"
+- New `room-controller` screen in index.html (single player card with mode pills + confirm button)
+- Polling mechanism in main.js: 2s interval on `/api/room/status`, drives screen transitions
+- P1 flow: create room → lobby → poll → P2 joins → controller selection → confirm → fight
+- P2 flow: join room → controller selection (direct, skips lobby) → confirm → fight
+- `startMultiplayerFight()` creates local input for current player + no-op InputManager for remote (networking wired in US-012)
+- 13 new tests: join-transitions-to-selecting, 4 room status tests, 8 room controller tests (P1/P2 set, both→fighting, invalid, missing, 404, 403, 503, all valid controllers)
+- Files changed:
+  - `server.py` — Added `room_status` GET + `room_controller` POST endpoints, `VALID_CONTROLLERS` set, auto-transition on join, registered in app routes
+  - `index.html` — Added room-controller screen div (player card, mode pills, confirm btn, status text), CSS for `.room-controller` and `.room-ctrl-status`
+  - `src/main.js` — Added roomController screen, room polling (startRoomPolling/stopRoomPolling/handleRoomStatusUpdate), showRoomControllerScreen, updateRoomControllerUI, controller confirm POST, startMultiplayerFight, LLM provider pill handling, Escape key for new screen
+  - `tests/test_server.py` — Added `_create_selecting_room` helper, TestRoomStatus (4 tests), TestRoomController (9 tests), test_join_transitions_to_selecting
+- **Learnings:**
+  - Room status transitions are the backbone of multiplayer flow — "waiting" → "selecting" → "fighting" maps cleanly to lobby → controller selection → game
+  - Polling is simpler than SSE for one-time state transitions (controller readiness) and avoids extra connection lifecycle management
+  - `_resolve_player_num` helper (from signaling) reuses well for any endpoint that needs to validate player identity against a room
+  - The multiplayer fight start needs a placeholder InputManager for the remote player — networking comes in US-008/US-012
+  - Auto-transitioning room status on join (inside the join endpoint) keeps the client logic simpler — P2 immediately knows it's time to select controllers
+---

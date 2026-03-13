@@ -483,6 +483,28 @@
 
     .room-url-row.hidden { display: none; }
 
+    /* ── Room controller selection ── */
+    .room-controller {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 20px;
+      padding: 20px;
+    }
+    .room-controller.hidden { display: none; }
+
+    .room-ctrl-status {
+      font-size: 12px;
+      color: var(--dg-pebble);
+      animation: pulse 2s ease-in-out infinite;
+    }
+    .room-ctrl-status.ready {
+      color: var(--dg-primary);
+      animation: none;
+    }
+
     .room-waiting {
       font-size: 14px;
       color: var(--dg-pebble);
@@ -615,6 +637,26 @@
     </div>
     <p class="room-waiting" id="room-waiting-text">Waiting for opponent...</p>
     <button class="back-btn" id="btn-lobby-back">← LEAVE ROOM</button>
+  </div>
+
+  <!-- Room controller selection (multiplayer — each player picks their own input) -->
+  <div class="room-controller hidden" id="room-controller">
+    <h2>SELECT YOUR CONTROLLER</h2>
+    <p class="join-hint" id="room-ctrl-hint">Choose your input mode for this match</p>
+    <div class="player-card p1" id="room-ctrl-card">
+      <h3 id="room-ctrl-player">PLAYER 1</h3>
+      <div class="mode-pills" id="room-ctrl-pills">
+        <button class="mode-pill selected" data-mode="0">Keys</button>
+        <button class="mode-pill" data-mode="1">Voice</button>
+        <button class="mode-pill" data-mode="2">Phone</button>
+        <button class="mode-pill" data-mode="3">Sim</button>
+        <button class="mode-pill" data-mode="4">LLM</button>
+      </div>
+      <div class="controls-info" id="room-ctrl-info"></div>
+    </div>
+    <button class="join-btn" id="btn-ctrl-confirm">CONFIRM</button>
+    <p class="room-ctrl-status" id="room-ctrl-status"></p>
+    <button class="back-btn" id="btn-ctrl-back">← LEAVE ROOM</button>
   </div>
 
   <!-- Onboarding screen (single-player fighter selection) -->

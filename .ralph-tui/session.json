@@ -3,10 +3,10 @@
   "sessionId": "c3614eb9-d39b-4e7a-b069-fb1bdd08a70c",
   "status": "running",
   "startedAt": "2026-03-13T14:38:07.817Z",
-  "updatedAt": "2026-03-13T15:47:06.224Z",
-  "currentIteration": 8,
+  "updatedAt": "2026-03-13T15:53:15.572Z",
+  "currentIteration": 9,
   "maxIterations": 0,
-  "tasksCompleted": 8,
+  "tasksCompleted": 9,
   "isPaused": false,
   "agentPlugin": "claude",
   "trackerState": {
@@ -65,8 +65,8 @@
       {
         "id": "stick-fighter-d4c.14",
         "title": "US-014: ELO rating system",
-        "status": "open",
-        "completedInSession": false
+        "status": "completed",
+        "completedInSession": true
       },
       {
         "id": "stick-fighter-d4c.13",
@@ -204,6 +204,16 @@
       "durationMs": 412637,
       "startedAt": "2026-03-13T15:35:50.379Z",
       "endedAt": "2026-03-13T15:42:43.016Z"
+    },
+    {
+      "iteration": 9,
+      "status": "completed",
+      "taskId": "stick-fighter-d4c.14",
+      "taskTitle": "US-014: ELO rating system",
+      "taskCompleted": true,
+      "durationMs": 261375,
+      "startedAt": "2026-03-13T15:42:44.687Z",
+      "endedAt": "2026-03-13T15:47:06.062Z"
     }
   ],
   "skippedTaskIds": [],
