@@ -106,6 +106,9 @@ export class Game {
     // Visual button latch — keeps buttons lit for a visible duration
     this._p1Latch = new Map(); // action → remaining seconds
     this._p2Latch = new Map();
+
+    // Prediction manager — set by multiplayer code (null for single player)
+    this.predictionManager = null;
   }
 
   /** Logical (CSS pixel) dimensions */
@@ -153,6 +156,7 @@ export class Game {
 
     this._dt = dt;
     this._update(dt);
+    if (this.predictionManager) this.predictionManager.updateSmoothing(dt);
     this._draw();
 
     this.p1Input.endFrame();
@@ -478,13 +482,24 @@ Distance: ${Math.round(dist)}px | Timer: ${Math.ceil(this.roundTimer)}s`;
     ctx.stroke();
     ctx.setLineDash([]);
 
-    // Fighters
+    // Fighters (with visual smoothing offsets for prediction corrections)
+    const pm = this.predictionManager;
+    if (pm) {
+      this.p1.x += pm.smoothP1.dx;
+      this.p1.y += pm.smoothP1.dy;
+      this.p2.x += pm.smoothP2.dx;
+      this.p2.y += pm.smoothP2.dy;
+    }
     this.p1.draw(ctx);
     this.p2.draw(ctx);
-
-    // Hitbox overlays
     this.p1.drawHitboxes(ctx);
     this.p2.drawHitboxes(ctx);
+    if (pm) {
+      this.p1.x -= pm.smoothP1.dx;
+      this.p1.y -= pm.smoothP1.dy;
+      this.p2.x -= pm.smoothP2.dx;
+      this.p2.y -= pm.smoothP2.dy;
+    }
 
     // Hit sparks + damage text
     for (const spark of this.hitSparks) {

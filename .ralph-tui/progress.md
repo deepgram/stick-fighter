@@ -21,6 +21,8 @@ after each iteration and it's included in prompts for context.
 - **Signaling pattern**: `signaling.py` manages in-memory signal sessions per room. POST `/api/room/signal` relays SDP/ICE to peer via SSE. GET `/api/room/signal/listen` delivers signals. GET `/api/rtc/config` returns STUN/TURN config. Player identity validated against Redis room hash (`p1_id`/`p2_id`).
 - **WebRTC data channel pattern**: `src/webrtc.js` has `PeerConnection` (manages RTCPeerConnection + game WebSocket + signaling SSE) and `RemoteInputAdapter` (standard InputAdapter interface for remote peer inputs). P1 creates offer + data channel, P2 answers. Inputs sent to both peer (data channel) and server (WebSocket). Fallback to WS-only if WebRTC fails after 3 reconnect attempts.
 - **Input send timing**: Tap into `localInput.endFrame()` to capture actions/justPressed before they're cleared — this is when the game loop has just consumed them. Avoids modifying the Game class.
+- **Prediction + rollback pattern**: `src/prediction.js` has `PredictionManager` that buffers local inputs with incrementing `seq` numbers. Server echoes back `p1_input_seq`/`p2_input_seq` in snapshots. On mismatch: restore server state via `Fighter.fromSnapshot()`, replay unconfirmed inputs (seq > confirmed), apply visual smoothing offsets that decay over frames. Game._draw() temporarily offsets fighter positions for rendering, then restores.
+- **Fighter serialization**: `Fighter.toSnapshot()`/`fromSnapshot()` use server snapshot format (snake_case keys). `fromSnapshot` resets `_prevImpact` to null. `animTimer` and `events` are not serialized (cosmetic/transient).
 
 ---
 
@@ -270,4 +272,34 @@ after each iteration and it's included in prompts for context.
   - MockWebSocket's `setTimeout` for auto-`onopen` causes Jest "Cannot log after tests" warnings — use `Promise.resolve().then()` instead for microtask timing
   - `endFrame()` interception is the cleanest way to capture inputs at exactly the right time — after the game consumed them, before `justPressed` is cleared — without modifying the Game class
   - WebRTC data channels with `ordered: false` + `maxRetransmits: 0` are ideal for fighting game inputs — stale input frames are useless, latest state matters most
+---
+
+## 2026-03-13 - stick-fighter-d4c.11
+- Implemented client-side prediction with rollback reconciliation for multiplayer
+- `Fighter.toSnapshot()`/`fromSnapshot()` serialize/restore all simulation state (snake_case format matching server)
+- `PredictionManager` class: input buffer with seq numbers, mismatch detection, rollback + replay, visual smoothing
+- Input sequence tracking: client tags each input with incrementing `seq`, server echoes `p1_input_seq`/`p2_input_seq` in snapshots
+- On mismatch (position >3px, health >0.1, or state change): rewind to server state, replay unconfirmed inputs, apply smoothing offsets
+- Visual smoothing: position offsets decay exponentially over ~5-8 frames, temporarily applied during rendering
+- Server always authoritative for health, round timer, and round over state
+- `Game._draw()` applies smoothing offsets around fighter rendering (temp x/y shift, then restore)
+- `Game._loop()` calls `predictionManager.updateSmoothing(dt)` for framerate-independent decay
+- 33 new JS tests (PredictionManager: constructor, seq, buffer, auth values, stale rejection, trimming, mismatch detection, rollback, smoothing, P2 perspective, snapshot roundtrip)
+- 6 new Python tests (seq tracking in drain_inputs, snapshot includes input_seq)
+- Files changed:
+  - `src/fighter.js` — Added `toSnapshot()` and `fromSnapshot()` methods
+  - `src/prediction.js` — New: PredictionManager class with full rollback + replay + visual smoothing
+  - `src/game.js` — Added `predictionManager` property, smoothing decay in `_loop()`, offset rendering in `_draw()`
+  - `src/webrtc.js` — Added `seq` parameter to `sendInput()` (backward-compatible, defaults to 0)
+  - `src/main.js` — Added PredictionManager import, wired into `startMultiplayerFight()` (creates PM, buffers inputs with seq, handles server state)
+  - `game_loop.py` — Added `last_input_seq` to PlayerConnection, seq tracking in `_drain_inputs()`, `p1_input_seq`/`p2_input_seq` in snapshots, widened Queue type to `dict[str, Any]`
+  - `tests/prediction.test.js` — New: 33 tests
+  - `tests/test_game_loop.py` — Added 6 tests for seq tracking and snapshot seq fields
+  - `tests/webrtc.test.js` — Updated sendInput test for seq parameter
+- **Learnings:**
+  - Input sequence numbers are essential for rollback — without them, the client can't know which inputs the server has already processed
+  - Only local player inputs need buffering for replay — remote player state comes from the server snapshot; empty inputs for remote during replay is a good simplification
+  - Visual smoothing as position offset (old - new) that decays exponentially is much simpler than interpolation and prevents jarring snaps
+  - `asyncio.Queue[dict[str, Any]]` is needed for mypy when the queue carries mixed-type dicts (actions: list[str] + seq: int)
+  - Fighter serialization should NOT include `animTimer` (cosmetic breathing animation) or `events` (per-frame transient set) — these would cause false rollback triggers
 ---

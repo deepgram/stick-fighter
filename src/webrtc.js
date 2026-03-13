@@ -75,11 +75,12 @@ export class PeerConnection {
    * server (WebSocket). The peer gets them for local prediction, the
    * server uses them for authoritative validation.
    */
-  sendInput(actions, justPressed) {
+  sendInput(actions, justPressed, seq = 0) {
     const msg = JSON.stringify({
       type: 'input',
       actions: Array.from(actions),
       just_pressed: Array.from(justPressed),
+      seq,
     });
 
     // Send to peer via data channel (if connected)

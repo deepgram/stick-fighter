@@ -9,6 +9,7 @@ import { LLMAdapter } from './llm.js';
 import { parseRoute } from './router.js';
 import { isAuthConfigured, login, logout, handleCallback, checkAuth, isLoggedIn, getUser } from './auth.js';
 import { PeerConnection, RemoteInputAdapter } from './webrtc.js';
+import { PredictionManager } from './prediction.js';
 
 const canvas = document.getElementById('game');
 
@@ -525,13 +526,20 @@ function startMultiplayerFight(_roomData) {
   if (roomCode && playerId) {
     peerConnection = new PeerConnection(roomCode, playerId, myNum);
 
+    // Client-side prediction with rollback reconciliation
+    const predictionManager = new PredictionManager(game, myNum);
+    game.predictionManager = predictionManager;
+
     // Feed remote peer inputs into the RemoteInputAdapter
     peerConnection.onRemoteInput((msg) => {
       remoteAdapter.receiveInput(msg);
     });
 
-    // Handle authoritative server state (used by US-009 reconciliation)
+    // Handle authoritative server state — prediction manager reconciles
     peerConnection.onServerState((msg) => {
+      if (msg.type === 'state' && predictionManager) {
+        predictionManager.applyServerState(msg);
+      }
       if (msg.type === 'round_over' && game) {
         game.roundOver = true;
       }
@@ -539,12 +547,16 @@ function startMultiplayerFight(_roomData) {
 
     peerConnection.connect();
 
-    // Tap into localInput.endFrame to send inputs before justPressed is cleared.
-    // This captures the exact actions the game loop just consumed.
+    // Tap into localInput.endFrame to buffer inputs for replay and send
+    // to peer + server. Captures the exact actions the game loop just consumed.
     const origEndFrame = localInput.endFrame.bind(localInput);
     localInput.endFrame = () => {
       if (peerConnection) {
-        peerConnection.sendInput(localInput.getActions(), localInput.getJustPressed());
+        const actions = localInput.getActions();
+        const pressed = localInput.getJustPressed();
+        const seq = predictionManager.nextSeq();
+        predictionManager.bufferInput(seq, actions, pressed, game._dt);
+        peerConnection.sendInput(actions, pressed, seq);
       }
       origEndFrame();
     };

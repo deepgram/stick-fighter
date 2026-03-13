@@ -36,9 +36,10 @@ class PlayerConnection:
 
     player: int  # 1 or 2
     socket: WebSocket
-    # Buffered inputs: each entry is {"actions": [...], "just_pressed": [...]}
-    input_queue: asyncio.Queue[dict[str, list[str]]] = field(default_factory=asyncio.Queue)
+    # Buffered inputs: each entry is {"actions": [...], "just_pressed": [...], "seq": int}
+    input_queue: asyncio.Queue[dict[str, Any]] = field(default_factory=asyncio.Queue)
     connected: bool = True
+    last_input_seq: int = 0  # highest input sequence number processed
 
 
 # ─────────────────────────────────────────────
@@ -85,6 +86,8 @@ def _serialize_fighter(f: Any) -> dict[str, Any]:
 
 def _build_snapshot(room: RoomLoop) -> dict[str, Any]:
     """Build the authoritative state snapshot broadcast each tick."""
+    p1_seq = room.players[1].last_input_seq if 1 in room.players else 0
+    p2_seq = room.players[2].last_input_seq if 2 in room.players else 0
     return {
         "type": "state",
         "tick": room.tick_count,
@@ -92,6 +95,8 @@ def _build_snapshot(room: RoomLoop) -> dict[str, Any]:
         "round_over": room.engine.round_over,
         "p1": _serialize_fighter(room.engine.p1),
         "p2": _serialize_fighter(room.engine.p2),
+        "p1_input_seq": p1_seq,
+        "p2_input_seq": p2_seq,
     }
 
 
@@ -100,6 +105,7 @@ def _drain_inputs(player: PlayerConnection) -> tuple[set[str], set[str]]:
 
     Multiple buffered input frames are merged: held actions use the latest
     frame, edge-triggered (just_pressed) accumulate across all buffered frames.
+    Also tracks the highest input sequence number for prediction reconciliation.
     """
     actions: set[str] = set()
     just_pressed: set[str] = set()
@@ -112,6 +118,10 @@ def _drain_inputs(player: PlayerConnection) -> tuple[set[str], set[str]]:
             has_input = True
             latest_actions = set(inp.get("actions", []))
             just_pressed |= set(inp.get("just_pressed", []))
+            # Track highest input sequence for client-side prediction
+            seq = inp.get("seq", 0)
+            if isinstance(seq, int) and seq > player.last_input_seq:
+                player.last_input_seq = seq
         except asyncio.QueueEmpty:
             break
 

@@ -130,6 +130,48 @@ export class Fighter {
     return this.y >= this.floorY;
   }
 
+  /** Serialize all simulation state to a plain object (server snapshot format). */
+  toSnapshot() {
+    return {
+      x: this.x, y: this.y, vx: this.vx, vy: this.vy,
+      facing: this.facing, state: this.state, health: this.health,
+      current_attack: this.currentAttack,
+      attack_frame: this.attackFrame,
+      attack_context: this.attackContext,
+      attack_has_hit: this.attackHasHit,
+      stun_frames: this.stunFrames,
+      dash_timer: this.dashTimer,
+      dash_dir: this.dashDir,
+      is_flipping: this.isFlipping,
+      flip_angle: this.flipAngle,
+      jump_count: this.jumpCount,
+      flip_count: this.flipCount,
+    };
+  }
+
+  /** Restore simulation state from a snapshot (server format, snake_case keys). */
+  fromSnapshot(s) {
+    this.x = s.x;
+    this.y = s.y;
+    this.vx = s.vx;
+    this.vy = s.vy;
+    this.facing = s.facing;
+    this.state = s.state;
+    this.health = s.health;
+    this.currentAttack = s.current_attack;
+    this.attackFrame = s.attack_frame;
+    this.attackContext = s.attack_context;
+    this.attackHasHit = s.attack_has_hit;
+    this.stunFrames = s.stun_frames;
+    this.dashTimer = s.dash_timer;
+    this.dashDir = s.dash_dir;
+    this.isFlipping = s.is_flipping;
+    this.flipAngle = s.flip_angle;
+    this.jumpCount = s.jump_count;
+    this.flipCount = s.flip_count;
+    this._prevImpact = null;
+  }
+
   get centerX() {
     return this.x;
   }

@@ -224,12 +224,13 @@ describe('PeerConnection', () => {
       pc.dataChannel = new MockDataChannel('test');
       pc.dataChannel._open();
 
-      pc.sendInput(new Set(['left', 'down']), new Set(['lightPunch']));
+      pc.sendInput(new Set(['left', 'down']), new Set(['lightPunch']), 42);
 
       const expected = JSON.stringify({
         type: 'input',
         actions: ['left', 'down'],
         just_pressed: ['lightPunch'],
+        seq: 42,
       });
       expect(pc.dataChannel.sent).toHaveLength(1);
       expect(pc.dataChannel.sent[0]).toBe(expected);

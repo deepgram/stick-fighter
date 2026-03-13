@@ -51,6 +51,7 @@ class TestPlayerConnection:
         assert conn.player == 1
         assert conn.connected is True
         assert conn.input_queue.empty()
+        assert conn.last_input_seq == 0
 
 
 # ─── _drain_inputs ────────────────────────────────
@@ -92,6 +93,32 @@ class TestDrainInputs:
         conn.input_queue.put_nowait({"actions": ["up"], "just_pressed": ["jump"]})
         _drain_inputs(conn)
         assert conn.input_queue.empty()
+
+    def test_tracks_input_seq(self) -> None:
+        conn = PlayerConnection(player=1, socket=_make_mock_socket())
+        conn.input_queue.put_nowait({"actions": [], "just_pressed": [], "seq": 5})
+        _drain_inputs(conn)
+        assert conn.last_input_seq == 5
+
+    def test_tracks_highest_input_seq(self) -> None:
+        conn = PlayerConnection(player=1, socket=_make_mock_socket())
+        conn.input_queue.put_nowait({"actions": [], "just_pressed": [], "seq": 3})
+        conn.input_queue.put_nowait({"actions": [], "just_pressed": [], "seq": 7})
+        conn.input_queue.put_nowait({"actions": [], "just_pressed": [], "seq": 5})
+        _drain_inputs(conn)
+        assert conn.last_input_seq == 7
+
+    def test_ignores_missing_seq(self) -> None:
+        conn = PlayerConnection(player=1, socket=_make_mock_socket())
+        conn.input_queue.put_nowait({"actions": ["left"], "just_pressed": []})
+        _drain_inputs(conn)
+        assert conn.last_input_seq == 0  # No seq field → stays at default
+
+    def test_ignores_non_integer_seq(self) -> None:
+        conn = PlayerConnection(player=1, socket=_make_mock_socket())
+        conn.input_queue.put_nowait({"actions": [], "just_pressed": [], "seq": "abc"})
+        _drain_inputs(conn)
+        assert conn.last_input_seq == 0
 
 
 # ─── _serialize_fighter ───────────────────────────
@@ -152,6 +179,24 @@ class TestBuildSnapshot:
         serialized = json.dumps(snap)
         parsed = json.loads(serialized)
         assert parsed["type"] == "state"
+
+    def test_snapshot_includes_input_seq_no_players(self) -> None:
+        room = RoomLoop(code="test-room-code", engine=GameEngine())
+        snap = _build_snapshot(room)
+        assert snap["p1_input_seq"] == 0
+        assert snap["p2_input_seq"] == 0
+
+    def test_snapshot_includes_input_seq_with_players(self) -> None:
+        room = RoomLoop(code="test-room-code", engine=GameEngine())
+        conn1 = PlayerConnection(player=1, socket=_make_mock_socket())
+        conn1.last_input_seq = 42
+        conn2 = PlayerConnection(player=2, socket=_make_mock_socket())
+        conn2.last_input_seq = 37
+        room.players[1] = conn1
+        room.players[2] = conn2
+        snap = _build_snapshot(room)
+        assert snap["p1_input_seq"] == 42
+        assert snap["p2_input_seq"] == 37
 
 
 # ─── GameLoopManager CRUD ────────────────────────
