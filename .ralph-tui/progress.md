@@ -11,6 +11,7 @@ after each iteration and it's included in prompts for context.
 - **Test infrastructure**: Python uses pytest + ruff + mypy (dev dependency group in pyproject.toml). JS uses Jest with ESM (`"type": "module"` in package.json, requires `NODE_OPTIONS=--experimental-vm-modules`).
 - **Litestar test client**: Use `from litestar.testing import TestClient` with `with TestClient(app=app) as client:` for route tests.
 - **Jest ESM**: `npx jest --experimental-vm-modules` doesn't work (that's a Node flag, not Jest). Use `node --experimental-vm-modules node_modules/.bin/jest` or `NODE_OPTIONS='--experimental-vm-modules' npx jest`.
+- **Python game engine**: `game_engine/` package mirrors JS client logic. Import from `game_engine` for `Fighter`, `GameEngine`, `Actions`, `ATTACK_DATA`. `GameEngine.tick()` is the headless equivalent of `Game._update()`.
 
 ---
 
@@ -37,4 +38,22 @@ after each iteration and it's included in prompts for context.
   - Script `src` attributes must be absolute paths when using client-side URL routing with nested paths
   - Jest ESM requires Node flag `--experimental-vm-modules`, not a Jest CLI flag
   - Litestar `TestClient` is straightforward — no special setup needed for route testing
+---
+
+## 2026-03-13 - stick-fighter-d4c.2
+- Ported core game logic from JavaScript to Python `game_engine/` package
+- Fighter class with identical physics, state machine, skeleton, hitbox/hurtbox system
+- GameEngine class with headless game loop, facing updates, clash detection, hit detection
+- 65 unit tests covering physics, state transitions, combat, dash, hit detection, determinism
+- Files changed:
+  - `game_engine/__init__.py` — Package init, public API exports
+  - `game_engine/actions.py` — Actions StrEnum + AttackData dataclass + ATTACK_DATA dict
+  - `game_engine/fighter.py` — Fighter class (physics, state machine, 7 skeleton builders, hitbox/hurtbox system)
+  - `game_engine/game.py` — GameEngine class (headless game loop, clash/hit detection)
+  - `tests/test_game_engine.py` — 65 tests across 8 test classes
+- **Learnings:**
+  - StrEnum allows plain string lookup in dicts/sets (`"lightPunch" in ATTACK_ACTIONS` works)
+  - mypy infers `int` from `f * 6` (int * int); must use `float()` when other branches assign `float` to same variable
+  - Skeleton building is needed server-side for hitbox computation (not just rendering)
+  - `_localToWorld` flip rotation must be ported exactly for somersault hitbox accuracy
 ---
