@@ -12,7 +12,31 @@ after each iteration and it's included in prompts for context.
 - **Litestar test client**: Use `from litestar.testing import TestClient` with `with TestClient(app=app) as client:` for route tests.
 - **Jest ESM**: `npx jest --experimental-vm-modules` doesn't work (that's a Node flag, not Jest). Use `node --experimental-vm-modules node_modules/.bin/jest` or `NODE_OPTIONS='--experimental-vm-modules' npx jest`.
 - **Python game engine**: `game_engine/` package mirrors JS client logic. Import from `game_engine` for `Fighter`, `GameEngine`, `Actions`, `ATTACK_DATA`. `GameEngine.tick()` is the headless equivalent of `Game._update()`.
+- **Redis async typing**: `redis.asyncio.Redis` methods return `Awaitable[T] | T` unions — mypy can't narrow these, so `# type: ignore[misc]` is needed on `await` calls. Standard practice for redis-py async code.
+- **fakeredis for testing**: Use `fakeredis.aioredis.FakeRedis(decode_responses=True)` as a drop-in for `redis.asyncio.Redis` in tests. No real Redis needed.
+- **Room manager pattern**: `room_manager.py` encapsulates all Redis room ops. Import `RoomManager` + `generate_room_code`. Server creates instance via lifespan context manager.
 
+---
+
+## 2026-03-13 - stick-fighter-d4c.1
+- Implemented Redis room state management for multiplayer rooms
+- RoomManager class with create/join/get/delete rooms, controller selection, status transitions, TTL refresh
+- Room data stored as Redis hash with fields: code, p1_id, p2_id, p1_controller, p2_controller, status, created_at
+- 5-minute TTL auto-expiry, refreshed on every activity
+- Status state machine: waiting → selecting → fighting → finished (invalid transitions rejected)
+- 3-word room code generator (adjective-noun-verb, 13k+ combinations)
+- Litestar lifespan context manager for Redis connection lifecycle
+- 36 async tests using fakeredis (no real Redis needed)
+- Files changed:
+  - `room_manager.py` — New: RoomManager class, word lists, code generation, all CRUD + transition ops
+  - `server.py` — Added redis.asyncio import, RoomManager import, lifespan context manager, lifespan=[lifespan] on app
+  - `pyproject.toml` — Added redis[hiredis] dep, pytest-asyncio + fakeredis dev deps
+  - `tests/test_room_manager.py` — New: 36 tests across 8 test classes (create, get, join, controller, transitions, TTL, delete, structure)
+- **Learnings:**
+  - redis-py async returns `Awaitable[T] | T` unions — mypy needs `# type: ignore[misc]` on await calls
+  - fakeredis.aioredis.FakeRedis is a perfect drop-in for redis.asyncio.Redis in tests
+  - Litestar `lifespan` parameter takes a list of async context managers
+  - pytest-asyncio 1.x uses `mode=Mode.STRICT` — fixtures need `@pytest_asyncio.fixture` decorator
 ---
 
 ## 2026-03-13 - stick-fighter-d4c.3

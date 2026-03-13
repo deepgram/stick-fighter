@@ -3,10 +3,10 @@
   "sessionId": "c3614eb9-d39b-4e7a-b069-fb1bdd08a70c",
   "status": "running",
   "startedAt": "2026-03-13T14:38:07.817Z",
-  "updatedAt": "2026-03-13T15:09:05.718Z",
-  "currentIteration": 1,
+  "updatedAt": "2026-03-13T15:13:35.553Z",
+  "currentIteration": 2,
   "maxIterations": 0,
-  "tasksCompleted": 1,
+  "tasksCompleted": 2,
   "isPaused": false,
   "agentPlugin": "claude",
   "trackerState": {
@@ -23,8 +23,8 @@
       {
         "id": "stick-fighter-d4c.2",
         "title": "US-005: Port core game logic to Python",
-        "status": "open",
-        "completedInSession": false
+        "status": "completed",
+        "completedInSession": true
       },
       {
         "id": "stick-fighter-d4c.1",
@@ -134,6 +134,16 @@
       "durationMs": 789582,
       "startedAt": "2026-03-13T14:38:10.548Z",
       "endedAt": "2026-03-13T14:51:20.130Z"
+    },
+    {
+      "iteration": 2,
+      "status": "completed",
+      "taskId": "stick-fighter-d4c.2",
+      "taskTitle": "US-005: Port core game logic to Python",
+      "taskCompleted": true,
+      "durationMs": 1063518,
+      "startedAt": "2026-03-13T14:51:22.081Z",
+      "endedAt": "2026-03-13T15:09:05.599Z"
     }
   ],
   "skippedTaskIds": [],

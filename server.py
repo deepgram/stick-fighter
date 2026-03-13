@@ -10,12 +10,14 @@ import os
 import random
 import uuid
 from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs
 
 import httpx
+import redis.asyncio as aioredis
 from deepgram import AsyncDeepgramClient  # Deepgram SDK v6
 from deepgram.core.events import EventType
 from deepgram.listen.v2.types import ListenV2TurnInfo, ListenV2Connected, ListenV2FatalError
@@ -26,11 +28,35 @@ from litestar.response.base import Response
 from litestar.static_files import create_static_files_router
 from litestar.exceptions import HTTPException
 
+from room_manager import RoomManager
+
 # ─────────────────────────────────────────────
 # Config
 # ─────────────────────────────────────────────
 
 ROOT = Path(__file__).parent
+
+# ─────────────────────────────────────────────
+# Redis / Room Manager lifecycle
+# ─────────────────────────────────────────────
+
+room_manager: RoomManager | None = None
+
+
+@asynccontextmanager
+async def lifespan(app: Litestar) -> AsyncGenerator[None, None]:
+    """Start/stop the Redis connection pool used by RoomManager."""
+    global room_manager  # noqa: PLW0603
+    redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379")
+    pool = aioredis.from_url(redis_url, decode_responses=True)
+    room_manager = RoomManager(pool)
+    print(f"[redis] Connected to {redis_url}")
+    try:
+        yield
+    finally:
+        await pool.aclose()
+        room_manager = None
+        print("[redis] Connection closed")
 
 DG_TTS_URL = "https://api.deepgram.com/v1/speak"
 ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
@@ -765,6 +791,7 @@ async def phone_close(data: dict[str, Any]) -> dict:
 # ─────────────────────────────────────────────
 
 app = Litestar(
+    lifespan=[lifespan],
     route_handlers=[
         health,
         index_route,

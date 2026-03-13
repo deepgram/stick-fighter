@@ -10,6 +10,7 @@ dependencies = [
     "httpx>=0.28",
     "python-dotenv>=1.0",
     "deepgram-sdk>=6.0.1",
+    "redis[hiredis]>=5.0",
 ]
 
 [project.scripts]
@@ -18,6 +19,8 @@ dev = "uvicorn server:app --reload --port 3000"
 [dependency-groups]
 dev = [
     "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "fakeredis>=2.26",
     "ruff>=0.8",
     "mypy>=1.13",
 ]
