@@ -17,6 +17,8 @@ after each iteration and it's included in prompts for context.
 - **Room manager pattern**: `room_manager.py` encapsulates all Redis room ops. Import `RoomManager` + `generate_room_code`. Server creates instance via lifespan context manager.
 - **Game loop pattern**: `game_loop.py` manages per-room asyncio tasks. `GameLoopManager` creates/starts/stops room loops. Each `RoomLoop` has a `GameEngine`, player connections with input queues, and broadcasts state at 20Hz. Mock WebSockets with `MagicMock` + `AsyncMock(send_data=...)` for testing.
 - **TestClient + global state**: Litestar's `TestClient` runs the app lifespan on `__enter__()`, which sets globals like `room_manager`. To test endpoints with fakeredis, inject the mock *after* `with TestClient(app=app) as client:` — not before — or the lifespan will overwrite it.
+- **fakeredis shared server for sync+async**: Use `fakeredis.FakeServer()` shared between sync `FakeRedis` and async `FakeRedis(server=...)` to manipulate test data from sync code without event loop conflicts. Essential when sync tests need to set up room state (e.g., joining P2) before hitting endpoints.
+- **Signaling pattern**: `signaling.py` manages in-memory signal sessions per room. POST `/api/room/signal` relays SDP/ICE to peer via SSE. GET `/api/room/signal/listen` delivers signals. GET `/api/rtc/config` returns STUN/TURN config. Player identity validated against Redis room hash (`p1_id`/`p2_id`).
 
 ---
 
@@ -123,4 +125,26 @@ after each iteration and it's included in prompts for context.
   - Litestar POST handlers default to HTTP 201, not 200
   - fakeredis instances are bound to the event loop they were created in — can't use `asyncio.get_event_loop().run_until_complete()` from sync test code to access them
   - `request.base_url` in Litestar returns the request origin (e.g., `http://testserver.local`), useful for building shareable URLs dynamically
+---
+
+## 2026-03-13 - stick-fighter-d4c.9
+- Implemented WebRTC signaling server for peer-to-peer connection establishment
+- POST `/api/room/signal` relays SDP offers/answers and ICE candidates between peers
+- GET `/api/room/signal/listen` SSE stream delivers signals to each player
+- GET `/api/rtc/config` returns STUN server configuration and fallback strategy
+- Player identity validated against Redis room hash (p1_id/p2_id) — prevents signal injection
+- SignalingManager class: connect/disconnect/relay/cleanup with in-memory queues per player
+- ICE servers: Google public STUN (stun.l.google.com:19302, stun1.l.google.com:19302)
+- Fallback: server-relay via existing `/ws/game/{code}` WebSocket when WebRTC fails
+- Signaling activity refreshes room TTL (prevents expiry during connection setup)
+- 36 new tests (21 unit for SignalingManager, 15 integration for endpoints)
+- Files changed:
+  - `signaling.py` — New: SignalingManager, SignalSession, ICE_SERVERS constant
+  - `server.py` — Added SignalingManager import/global/lifespan, 3 endpoints (rtc_config, signal_send, signal_listen), _resolve_player_num helper, registered in app routes
+  - `tests/test_signaling.py` — New: 36 tests across 9 test classes
+- **Learnings:**
+  - `fakeredis.FakeServer()` enables shared state between sync and async FakeRedis clients — solves the event loop mismatch when sync tests need to manipulate Redis data
+  - SSE + POST relay pattern works well for WebRTC signaling — matches existing codebase patterns (LLM/phone sessions)
+  - Player authentication via UUID player ID is sufficient for signaling — no separate auth needed since IDs are server-generated secrets
+  - Room TTL refresh on signaling activity prevents room expiry during WebRTC handshake (ICE negotiation can take several seconds)
 ---

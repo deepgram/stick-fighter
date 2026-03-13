@@ -30,6 +30,7 @@ from litestar.exceptions import HTTPException
 
 from room_manager import RoomManager
 from game_loop import GameLoopManager
+from signaling import SignalingManager, ICE_SERVERS
 
 # ─────────────────────────────────────────────
 # Config
@@ -43,16 +44,18 @@ ROOT = Path(__file__).parent
 
 room_manager: RoomManager | None = None
 game_loop_manager: GameLoopManager | None = None
+signaling_manager: SignalingManager | None = None
 
 
 @asynccontextmanager
 async def lifespan(app: Litestar) -> AsyncGenerator[None, None]:
     """Start/stop the Redis connection pool and game loop manager."""
-    global room_manager, game_loop_manager  # noqa: PLW0603
+    global room_manager, game_loop_manager, signaling_manager  # noqa: PLW0603
     redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379")
     pool = aioredis.from_url(redis_url, decode_responses=True)
     room_manager = RoomManager(pool)
     game_loop_manager = GameLoopManager()
+    signaling_manager = SignalingManager()
     print(f"[redis] Connected to {redis_url}")
     try:
         yield
@@ -60,6 +63,7 @@ async def lifespan(app: Litestar) -> AsyncGenerator[None, None]:
         if game_loop_manager is not None:
             await game_loop_manager.stop_all()
         game_loop_manager = None
+        signaling_manager = None
         await pool.aclose()
         room_manager = None
         print("[redis] Connection closed")
@@ -554,6 +558,120 @@ async def room_create(request: Request) -> dict[str, str]:
     }
 
 
+# ─────────────────────────────────────────────
+# WebRTC signaling
+# ─────────────────────────────────────────────
+
+
+def _resolve_player_num(room_data: dict[str, str], player_id: str) -> int:
+    """Determine player number (1 or 2) from a room's data and a player ID.
+
+    Raises HTTPException if the player doesn't belong to this room.
+    """
+    if room_data["p1_id"] == player_id:
+        return 1
+    if room_data["p2_id"] == player_id:
+        return 2
+    raise HTTPException(status_code=403, detail="Player not in this room")
+
+
+@get("/api/rtc/config")
+async def rtc_config() -> dict[str, Any]:
+    """Return WebRTC ICE server configuration and fallback strategy.
+
+    Clients use this to configure RTCPeerConnection. If WebRTC fails,
+    clients fall back to server-only relay via /ws/game/{code}.
+    """
+    return {
+        "iceServers": ICE_SERVERS,
+        "fallback": "server-relay",
+    }
+
+
+@post("/api/room/signal")
+async def signal_send(data: dict[str, Any]) -> dict[str, bool]:
+    """Relay a WebRTC signal (SDP offer/answer or ICE candidate) to the other peer.
+
+    Validates the room exists in Redis and the sender belongs to it.
+
+    Request body:
+        room: str — room code
+        playerId: str — sender's player ID (from room create/join)
+        signal: dict — the WebRTC signal payload (type + sdp/candidate data)
+    """
+    if room_manager is None or signaling_manager is None:
+        raise HTTPException(status_code=503, detail="Service not available")
+
+    room_code: str = data.get("room", "")
+    player_id: str = data.get("playerId", "")
+    signal: dict[str, Any] = data.get("signal", {})
+
+    if not room_code or not player_id or not signal:
+        raise HTTPException(status_code=400, detail="room, playerId, and signal are required")
+
+    # Validate room in Redis and resolve player number
+    room_data = await room_manager.get_room(room_code)
+    if room_data is None:
+        raise HTTPException(status_code=404, detail="Room not found")
+
+    from_player = _resolve_player_num(room_data, player_id)
+
+    # Relay signal to the other player's SSE queue
+    relayed = await signaling_manager.relay(room_code, from_player, signal)
+    print(f"[signal:{room_code}] P{from_player} → P{2 if from_player == 1 else 1}: {signal.get('type', '?')} (relayed={relayed})")
+
+    # Refresh room TTL on signaling activity
+    await room_manager.refresh_ttl(room_code)
+
+    return {"relayed": relayed}
+
+
+@get("/api/room/signal/listen")
+async def signal_listen(room: str, player_id: str) -> ServerSentEvent:
+    """SSE stream for receiving WebRTC signals from the other peer.
+
+    Query params:
+        room: str — room code
+        player_id: str — this player's ID (from room create/join)
+
+    Sends ICE server config on connect, then relays signals as they arrive.
+    """
+    if room_manager is None or signaling_manager is None:
+        raise HTTPException(status_code=503, detail="Service not available")
+
+    # Validate room in Redis
+    room_data = await room_manager.get_room(room)
+    if room_data is None:
+        raise HTTPException(status_code=404, detail="Room not found")
+
+    player_num = _resolve_player_num(room_data, player_id)
+
+    # Register signaling session
+    session = signaling_manager.connect(room, player_num)
+    print(f"[signal:{room}] P{player_num} SSE connected")
+
+    async def event_generator() -> AsyncGenerator[dict[str, Any], None]:
+        # First message includes ICE server config so the client can
+        # create RTCPeerConnection immediately
+        yield {"data": json.dumps({
+            "type": "connected",
+            "player": player_num,
+            "iceServers": ICE_SERVERS,
+        })}
+        try:
+            while not session.closed:
+                try:
+                    data = await asyncio.wait_for(session.queue.get(), timeout=30)
+                    yield {"data": json.dumps(data)}
+                except asyncio.TimeoutError:
+                    yield {"comment": "keepalive"}
+        finally:
+            signaling_manager.disconnect(room, player_num)
+            print(f"[signal:{room}] P{player_num} SSE disconnected")
+
+    return ServerSentEvent(event_generator())
+
+
 @get("/api/session/connect")
 async def session_connect(mode: str | None = None, player: int = 1) -> ServerSentEvent:
     if mode != "llm":
@@ -901,6 +1019,9 @@ app = Litestar(
         index_route,
         room_route,
         room_create,
+        rtc_config,
+        signal_send,
+        signal_listen,
         stt_proxy,
         llm_command,
         voice_llm,
