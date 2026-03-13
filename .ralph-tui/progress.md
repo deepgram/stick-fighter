@@ -451,3 +451,24 @@ after each iteration and it's included in prompts for context.
   - `personality_prompt` must NOT be exposed in the `/api/characters` response — it's a server-side detail and would reveal system prompt internals
   - The `selectedCharacter` state variable serves double duty: tracks selection AND distinguishes "character fight" from "classic fight" for post-game routing
 ---
+
+## 2026-03-13 - stick-fighter-d4c.18
+- Implemented distinct AI fighting personalities (US-018)
+- Added `temperature` field to `Character` dataclass (default 0.7)
+- Haiku the Swift: temperature 0.9 (varied, unpredictable aggression), speed taunts
+- GPT the Tank: temperature 0.4 (consistent, methodical defense), patience taunts
+- Updated `_llm_anthropic` and `_llm_openai` to accept optional `temperature` parameter
+- Temperature conditionally included in API request body (only when character selected)
+- Enhanced personality prompts with explicit taunt lines (speed/patience themes)
+- 17 new tests: 6 character definition (taunts, temperature), 3 temperature passthrough (haiku/gpt/none), 8 distinct personality verification (attack/defense ratios, heavy/light emphasis, plan requirements, extensibility)
+- All 34 character tests pass (was 17, now 34)
+- Files changed:
+  - `characters.py` — Added `temperature` field to Character dataclass, set per-character temps (0.9/0.4), added taunt lines to personality prompts
+  - `server.py` — Updated `llm_command` to extract character temperature, updated `_llm_anthropic`/`_llm_openai` signatures to accept optional temperature, conditionally include in API body
+  - `tests/test_characters.py` — Added 17 new tests: TestCharacterDefinitions (taunts, temperature), TestLLMCommandWithCharacter (temperature passthrough), TestDistinctPersonalities (move distribution, plan requirements, extensibility)
+- **Learnings:**
+  - Temperature is an effective gameplay lever: higher temp → more varied/unpredictable moves (aggressive), lower temp → more consistent/methodical (defensive)
+  - Only include `temperature` in API body when set (not None) — sending default temp could override provider defaults unnecessarily
+  - Move distribution can be verified statically by counting keyword mentions in personality prompts — doesn't need live LLM calls
+  - Taunt lines in prompts serve as internal reasoning guides even though the LLM only outputs JSON arrays — they shape the "mood" of move selection
+---

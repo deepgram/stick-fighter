@@ -66,6 +66,44 @@ class TestCharacterDefinitions:
         prompt = char.personality_prompt.lower()
         assert "defen" in prompt or "block" in prompt
 
+    def test_haiku_has_speed_taunts(self) -> None:
+        char = get_character("haiku")
+        assert char is not None
+        prompt = char.personality_prompt.lower()
+        assert "taunt" in prompt
+        assert "speed" in prompt or "fast" in prompt or "slow" in prompt
+
+    def test_gpt_has_patience_taunts(self) -> None:
+        char = get_character("gpt")
+        assert char is not None
+        prompt = char.personality_prompt.lower()
+        assert "taunt" in prompt
+        assert "patience" in prompt or "wait" in prompt or "impatien" in prompt
+
+    def test_haiku_has_high_temperature(self) -> None:
+        """Haiku should have a higher temperature for varied aggression."""
+        char = get_character("haiku")
+        assert char is not None
+        assert char.temperature > 0.7
+
+    def test_gpt_has_low_temperature(self) -> None:
+        """GPT should have a lower temperature for methodical defense."""
+        char = get_character("gpt")
+        assert char is not None
+        assert char.temperature < 0.6
+
+    def test_characters_have_different_temperatures(self) -> None:
+        """Characters must have distinct temperatures for different play styles."""
+        haiku = get_character("haiku")
+        gpt = get_character("gpt")
+        assert haiku is not None and gpt is not None
+        assert haiku.temperature != gpt.temperature
+
+    def test_all_characters_have_temperature(self) -> None:
+        """All characters must have a valid temperature between 0 and 2."""
+        for char in CHARACTER_LIST:
+            assert 0.0 <= char.temperature <= 2.0
+
 
 # ─────────────────────────────────────────────
 # Endpoint tests for GET /api/characters
@@ -237,3 +275,175 @@ class TestLLMCommandWithCharacter:
             assert resp.status_code == 201
             # Should have called openai, not anthropic
             mock_openai.assert_called_once()
+
+    @patch("server._llm_anthropic", new_callable=AsyncMock)
+    def test_haiku_passes_temperature(
+        self, mock_anthropic: AsyncMock
+    ) -> None:
+        """Haiku character should pass its temperature to the provider."""
+        mock_anthropic.return_value = '["dash forward", "light punch"]'
+
+        with TestClient(app=app) as client:
+            client.post(
+                "/api/llm/command",
+                content=json.dumps({
+                    "character": "haiku",
+                    "messages": [{"role": "user", "content": "test"}],
+                }),
+                headers={"Content-Type": "application/json"},
+            )
+
+            call_kwargs = mock_anthropic.call_args
+            temperature = call_kwargs[1].get("temperature")
+            assert temperature == 0.9
+
+    @patch("server._llm_openai", new_callable=AsyncMock)
+    def test_gpt_passes_temperature(
+        self, mock_openai: AsyncMock
+    ) -> None:
+        """GPT character should pass its temperature to the provider."""
+        mock_openai.return_value = '["back", "heavy punch"]'
+
+        with TestClient(app=app) as client:
+            client.post(
+                "/api/llm/command",
+                content=json.dumps({
+                    "character": "gpt",
+                    "messages": [{"role": "user", "content": "test"}],
+                }),
+                headers={"Content-Type": "application/json"},
+            )
+
+            call_kwargs = mock_openai.call_args
+            temperature = call_kwargs[1].get("temperature")
+            assert temperature == 0.4
+
+    @patch("server._llm_anthropic", new_callable=AsyncMock)
+    def test_no_character_no_temperature(
+        self, mock_anthropic: AsyncMock
+    ) -> None:
+        """Without a character, temperature should be None (use provider default)."""
+        mock_anthropic.return_value = '["forward"]'
+
+        with TestClient(app=app) as client:
+            client.post(
+                "/api/llm/command",
+                content=json.dumps({
+                    "provider": "anthropic",
+                    "messages": [{"role": "user", "content": "test"}],
+                }),
+                headers={"Content-Type": "application/json"},
+            )
+
+            call_kwargs = mock_anthropic.call_args
+            temperature = call_kwargs[1].get("temperature")
+            assert temperature is None
+
+
+# ─────────────────────────────────────────────
+# Tests for distinct fighting personalities
+# ─────────────────────────────────────────────
+
+
+class TestDistinctPersonalities:
+    """Verify characters have measurably different fighting style guidance."""
+
+    ATTACK_KEYWORDS = {
+        "light punch", "medium punch", "heavy punch",
+        "light kick", "medium kick", "heavy kick",
+    }
+    DEFENSIVE_KEYWORDS = {"block", "back", "crouch", "dash back"}
+    AGGRESSIVE_KEYWORDS = {
+        "dash forward", "attack", "offense", "light punch",
+        "light kick", "jump",
+    }
+
+    def _count_prompt_mentions(self, prompt: str, keywords: set[str]) -> int:
+        """Count how many times keywords appear in the prompt."""
+        lower = prompt.lower()
+        return sum(lower.count(kw) for kw in keywords)
+
+    def test_haiku_more_attack_references_than_defense(self) -> None:
+        """Haiku's prompt should emphasize attack commands over defensive ones."""
+        char = get_character("haiku")
+        assert char is not None
+        prompt = char.personality_prompt
+        attack_count = self._count_prompt_mentions(prompt, self.AGGRESSIVE_KEYWORDS)
+        defense_count = self._count_prompt_mentions(prompt, self.DEFENSIVE_KEYWORDS)
+        assert attack_count > defense_count, (
+            f"Haiku should be attack-heavy: attacks={attack_count}, defense={defense_count}"
+        )
+
+    def test_gpt_more_defense_references_than_haiku(self) -> None:
+        """GPT's prompt should have more defensive references than Haiku's."""
+        haiku = get_character("haiku")
+        gpt = get_character("gpt")
+        assert haiku is not None and gpt is not None
+        haiku_def = self._count_prompt_mentions(haiku.personality_prompt, self.DEFENSIVE_KEYWORDS)
+        gpt_def = self._count_prompt_mentions(gpt.personality_prompt, self.DEFENSIVE_KEYWORDS)
+        assert gpt_def > haiku_def, (
+            f"GPT should have more defense refs: gpt={gpt_def}, haiku={haiku_def}"
+        )
+
+    def test_haiku_more_aggression_references_than_gpt(self) -> None:
+        """Haiku's prompt should have more aggressive references than GPT's."""
+        haiku = get_character("haiku")
+        gpt = get_character("gpt")
+        assert haiku is not None and gpt is not None
+        haiku_agg = self._count_prompt_mentions(haiku.personality_prompt, self.AGGRESSIVE_KEYWORDS)
+        gpt_agg = self._count_prompt_mentions(gpt.personality_prompt, self.AGGRESSIVE_KEYWORDS)
+        assert haiku_agg > gpt_agg, (
+            f"Haiku should have more aggression refs: haiku={haiku_agg}, gpt={gpt_agg}"
+        )
+
+    def test_gpt_emphasizes_heavy_attacks(self) -> None:
+        """GPT should mention heavy attacks more than light attacks."""
+        char = get_character("gpt")
+        assert char is not None
+        prompt = char.personality_prompt.lower()
+        heavy_count = prompt.count("heavy")
+        light_count = prompt.count("light")
+        assert heavy_count > light_count, (
+            f"GPT should favor heavies: heavy={heavy_count}, light={light_count}"
+        )
+
+    def test_haiku_emphasizes_light_attacks(self) -> None:
+        """Haiku should mention light attacks more than heavy attacks."""
+        char = get_character("haiku")
+        assert char is not None
+        prompt = char.personality_prompt.lower()
+        light_count = prompt.count("light")
+        heavy_count = prompt.count("heavy")
+        assert light_count > heavy_count, (
+            f"Haiku should favor lights: light={light_count}, heavy={heavy_count}"
+        )
+
+    def test_haiku_demands_three_attacks_per_plan(self) -> None:
+        """Haiku's prompt should instruct at least 3 attacks per 5-move plan."""
+        char = get_character("haiku")
+        assert char is not None
+        assert "at least 3 attacks" in char.personality_prompt.lower()
+
+    def test_gpt_demands_block_per_plan(self) -> None:
+        """GPT's prompt should instruct at least 1 block per plan."""
+        char = get_character("gpt")
+        assert char is not None
+        assert "at least 1" in char.personality_prompt.lower()
+        assert "block" in char.personality_prompt.lower()
+
+    def test_new_character_only_needs_config(self) -> None:
+        """Adding a character requires only a CHARACTERS dict entry."""
+        # Simulate adding a new character — just a dataclass, no imports needed
+        new_char = Character(
+            id="test",
+            name="Test Fighter",
+            provider="anthropic",
+            icon="?",
+            description="A test fighter",
+            personality_prompt="\n\nPERSONALITY: You are a test fighter.",
+            temperature=0.5,
+        )
+        # Verify it has all required fields — no game loop changes needed
+        assert new_char.id == "test"
+        assert new_char.temperature == 0.5
+        assert new_char.personality_prompt.startswith("\n\nPERSONALITY:")

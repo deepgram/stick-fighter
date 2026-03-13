@@ -323,11 +323,13 @@ async def llm_command(data: dict[str, Any]) -> dict:
 
     # Build system prompt: base + optional character personality
     system_prompt = LLM_FIGHTER_SYSTEM
+    temperature: float | None = None
     if character_id:
         char = get_character(character_id)
         if char:
             system_prompt = LLM_FIGHTER_SYSTEM + char.personality_prompt
             provider = char.provider  # character determines provider
+            temperature = char.temperature
 
     # Log outgoing request
     print(f"[llm-fighter:{provider}] ─── REQUEST ───")
@@ -342,9 +344,9 @@ async def llm_command(data: dict[str, Any]) -> dict:
         print(f"[llm-fighter:{provider}]   ... ({len(messages) - 4} earlier messages omitted)")
 
     if provider == "openai":
-        text = await _llm_openai(messages, system_prompt)
+        text = await _llm_openai(messages, system_prompt, temperature=temperature)
     else:
-        text = await _llm_anthropic(messages, system_prompt)
+        text = await _llm_anthropic(messages, system_prompt, temperature=temperature)
 
     # Parse JSON array of moves
     raw = text.strip()
@@ -371,11 +373,24 @@ async def llm_command(data: dict[str, Any]) -> dict:
     return {"plan": plan}
 
 
-async def _llm_anthropic(messages: list[dict], system_prompt: str = LLM_FIGHTER_SYSTEM) -> str:
+async def _llm_anthropic(
+    messages: list[dict],
+    system_prompt: str = LLM_FIGHTER_SYSTEM,
+    temperature: float | None = None,
+) -> str:
     """Call Anthropic Claude Haiku 4.5."""
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY not set")
+
+    body: dict[str, Any] = {
+        "model": "claude-haiku-4-5-20251001",
+        "max_tokens": 150,
+        "system": system_prompt,
+        "messages": messages,
+    }
+    if temperature is not None:
+        body["temperature"] = temperature
 
     async with httpx.AsyncClient(timeout=10) as client:
         resp = await client.post(
@@ -385,12 +400,7 @@ async def _llm_anthropic(messages: list[dict], system_prompt: str = LLM_FIGHTER_
                 "anthropic-version": "2023-06-01",
                 "content-type": "application/json",
             },
-            json={
-                "model": "claude-haiku-4-5-20251001",
-                "max_tokens": 150,
-                "system": system_prompt,
-                "messages": messages,
-            },
+            json=body,
         )
 
     if resp.status_code != 200:
@@ -411,7 +421,11 @@ async def _llm_anthropic(messages: list[dict], system_prompt: str = LLM_FIGHTER_
     return text
 
 
-async def _llm_openai(messages: list[dict], system_prompt: str = LLM_FIGHTER_SYSTEM) -> str:
+async def _llm_openai(
+    messages: list[dict],
+    system_prompt: str = LLM_FIGHTER_SYSTEM,
+    temperature: float | None = None,
+) -> str:
     """Call OpenAI GPT-4o mini."""
     api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
@@ -420,6 +434,14 @@ async def _llm_openai(messages: list[dict], system_prompt: str = LLM_FIGHTER_SYS
     # OpenAI uses system message in the messages array
     oai_messages = [{"role": "system", "content": system_prompt}] + messages
 
+    body: dict[str, Any] = {
+        "model": "gpt-4o-mini",
+        "max_tokens": 150,
+        "messages": oai_messages,
+    }
+    if temperature is not None:
+        body["temperature"] = temperature
+
     async with httpx.AsyncClient(timeout=10) as client:
         resp = await client.post(
             OPENAI_URL,
@@ -427,11 +449,7 @@ async def _llm_openai(messages: list[dict], system_prompt: str = LLM_FIGHTER_SYS
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
             },
-            json={
-                "model": "gpt-4o-mini",
-                "max_tokens": 150,
-                "messages": oai_messages,
-            },
+            json=body,
         )
 
     if resp.status_code != 200:
