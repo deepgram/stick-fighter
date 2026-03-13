@@ -558,6 +558,34 @@ async def room_create(request: Request) -> dict[str, str]:
     }
 
 
+@post("/api/room/join")
+async def room_join(data: dict[str, str]) -> dict[str, str]:
+    """Join an existing room as Player 2. Returns room code and player ID."""
+    if room_manager is None:
+        raise HTTPException(status_code=503, detail="Room manager not available")
+
+    code = data.get("code", "").strip().lower()
+    if not code:
+        raise HTTPException(status_code=400, detail="Room code is required")
+
+    player_id = str(uuid.uuid4())
+    try:
+        room = await room_manager.join_room(code, player_id)
+    except ValueError as exc:
+        msg = str(exc)
+        if "not found" in msg:
+            raise HTTPException(status_code=404, detail=msg)
+        if "full" in msg:
+            raise HTTPException(status_code=409, detail=msg)
+        raise HTTPException(status_code=400, detail=msg)
+
+    return {
+        "code": room["code"],
+        "playerId": player_id,
+        "playerNum": "2",
+    }
+
+
 # ─────────────────────────────────────────────
 # WebRTC signaling
 # ─────────────────────────────────────────────
@@ -1019,6 +1047,7 @@ app = Litestar(
         index_route,
         room_route,
         room_create,
+        room_join,
         rtc_config,
         signal_send,
         signal_listen,

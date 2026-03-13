@@ -148,3 +148,26 @@ after each iteration and it's included in prompts for context.
   - Player authentication via UUID player ID is sufficient for signaling — no separate auth needed since IDs are server-generated secrets
   - Room TTL refresh on signaling activity prevents room expiry during WebRTC handshake (ICE negotiation can take several seconds)
 ---
+
+## 2026-03-13 - stick-fighter-d4c.7
+- Implemented POST `/api/room/join` endpoint for joining rooms as Player 2
+- Endpoint validates room existence (404), fullness (409), and missing code (400)
+- Wired frontend JOIN button to call `/api/room/join` and navigate to room lobby
+- URL auto-join: navigating to `/room/:code` auto-calls `joinRoom(code)` on page load
+- Room lobby screen adapts for P1 (shows URL + copy) vs P2 (hides URL row, shows "joined" context)
+- Error display on join-room screen for invalid/expired/full rooms (red text)
+- Enter key submits on join room input field
+- Back button clears error state
+- Room code normalized to lowercase before API call
+- 8 new Python tests (join success, P2 in Redis, 404, 409, 400 empty/missing, 503, case normalization)
+- Files changed:
+  - `server.py` — Added `room_join` POST endpoint at `/api/room/join`, registered in app routes
+  - `index.html` — Added join-error element, room-lobby-title/hint/url-row IDs, CSS for error + hidden url-row
+  - `src/main.js` — Added `joinRoom()` async function, wired JOIN button + Enter key + URL auto-join, P1/P2 lobby modes, error handling
+  - `tests/test_server.py` — Added `room_client_with_sync` fixture (shared FakeServer), `_create_waiting_room` helper, 8 TestRoomJoin tests
+- **Learnings:**
+  - `fakeredis.FakeServer()` shared between sync + async clients is essential for pre-populating test data in sync test contexts
+  - Litestar POST returns 201 by default — the join endpoint follows this naturally
+  - Room manager's `join_room` ValueError messages are specific enough to map to distinct HTTP status codes (404 vs 409 vs 400)
+  - URL auto-join shows the join screen first (with code pre-filled) so errors are visible if the room is invalid
+---

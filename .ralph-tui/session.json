@@ -3,10 +3,10 @@
   "sessionId": "c3614eb9-d39b-4e7a-b069-fb1bdd08a70c",
   "status": "running",
   "startedAt": "2026-03-13T14:38:07.817Z",
-  "updatedAt": "2026-03-13T15:32:10.992Z",
-  "currentIteration": 5,
+  "updatedAt": "2026-03-13T15:35:48.867Z",
+  "currentIteration": 6,
   "maxIterations": 0,
-  "tasksCompleted": 5,
+  "tasksCompleted": 6,
   "isPaused": false,
   "agentPlugin": "claude",
   "trackerState": {
@@ -35,8 +35,8 @@
       {
         "id": "stick-fighter-d4c.9",
         "title": "US-007: WebRTC signaling server",
-        "status": "open",
-        "completedInSession": false
+        "status": "completed",
+        "completedInSession": true
       },
       {
         "id": "stick-fighter-d4c.7",
@@ -174,6 +174,16 @@
       "durationMs": 373849,
       "startedAt": "2026-03-13T15:20:13.046Z",
       "endedAt": "2026-03-13T15:26:26.895Z"
+    },
+    {
+      "iteration": 6,
+      "status": "completed",
+      "taskId": "stick-fighter-d4c.9",
+      "taskTitle": "US-007: WebRTC signaling server",
+      "taskCompleted": true,
+      "durationMs": 342136,
+      "startedAt": "2026-03-13T15:26:28.725Z",
+      "endedAt": "2026-03-13T15:32:10.861Z"
     }
   ],
   "skippedTaskIds": [],

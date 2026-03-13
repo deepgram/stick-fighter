@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import json
+import time
+
+import fakeredis
 import fakeredis.aioredis
 import pytest
 from litestar.testing import TestClient
@@ -17,6 +21,28 @@ def room_client():
         manager = RoomManager(redis)
         server.room_manager = manager
         yield client
+        server.room_manager = None
+
+
+@pytest.fixture()
+def room_client_with_sync():
+    """TestClient + sync FakeRedis for pre-populating room data in tests.
+
+    Returns (client, sync_redis) — sync_redis shares the same server as the
+    async FakeRedis used by the room manager, so data set via sync is visible
+    to the async manager.
+    """
+    fake_server = fakeredis.FakeServer()
+    with TestClient(app=app) as client:
+        async_redis = fakeredis.aioredis.FakeRedis(
+            decode_responses=True, server=fake_server
+        )
+        sync_redis = fakeredis.FakeRedis(
+            decode_responses=True, server=fake_server
+        )
+        manager = RoomManager(async_redis)
+        server.room_manager = manager
+        yield client, sync_redis
         server.room_manager = None
 
 
@@ -97,3 +123,110 @@ class TestRoomCreate:
             server.room_manager = None
             resp = client.post("/api/room/create")
             assert resp.status_code == 503
+
+
+# ─── Room join endpoint ──────────────────────────
+
+
+def _create_waiting_room(sync_redis, code: str = "red-tiger-paw", p1_id: str = "p1-uuid") -> None:
+    """Pre-populate a room in Redis using the sync client."""
+    key = f"room:{code}"
+    sync_redis.hset(key, mapping={
+        "code": code,
+        "p1_id": p1_id,
+        "p2_id": "",
+        "p1_controller": "",
+        "p2_controller": "",
+        "status": "waiting",
+        "created_at": str(int(time.time())),
+    })
+    sync_redis.expire(key, 300)
+
+
+class TestRoomJoin:
+    def test_join_returns_player_info(self, room_client_with_sync) -> None:
+        client, sync_redis = room_client_with_sync
+        _create_waiting_room(sync_redis, "red-tiger-paw")
+        resp = client.post(
+            "/api/room/join",
+            content=json.dumps({"code": "red-tiger-paw"}),
+            headers={"Content-Type": "application/json"},
+        )
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["code"] == "red-tiger-paw"
+        assert data["playerNum"] == "2"
+        assert len(data["playerId"]) == 36  # UUID
+
+    def test_join_assigns_p2_in_redis(self, room_client_with_sync) -> None:
+        client, sync_redis = room_client_with_sync
+        _create_waiting_room(sync_redis, "red-tiger-paw")
+        resp = client.post(
+            "/api/room/join",
+            content=json.dumps({"code": "red-tiger-paw"}),
+            headers={"Content-Type": "application/json"},
+        )
+        data = resp.json()
+        # Verify P2 was actually stored in Redis
+        p2_id = sync_redis.hget("room:red-tiger-paw", "p2_id")
+        assert p2_id == data["playerId"]
+
+    def test_join_nonexistent_room_returns_404(self, room_client_with_sync) -> None:
+        client, _ = room_client_with_sync
+        resp = client.post(
+            "/api/room/join",
+            content=json.dumps({"code": "no-such-room"}),
+            headers={"Content-Type": "application/json"},
+        )
+        assert resp.status_code == 404
+
+    def test_join_full_room_returns_409(self, room_client_with_sync) -> None:
+        client, sync_redis = room_client_with_sync
+        _create_waiting_room(sync_redis, "full-room-test")
+        # Fill the room by setting p2_id
+        sync_redis.hset("room:full-room-test", "p2_id", "existing-p2")
+        resp = client.post(
+            "/api/room/join",
+            content=json.dumps({"code": "full-room-test"}),
+            headers={"Content-Type": "application/json"},
+        )
+        assert resp.status_code == 409
+
+    def test_join_empty_code_returns_400(self, room_client_with_sync) -> None:
+        client, _ = room_client_with_sync
+        resp = client.post(
+            "/api/room/join",
+            content=json.dumps({"code": ""}),
+            headers={"Content-Type": "application/json"},
+        )
+        assert resp.status_code == 400
+
+    def test_join_missing_code_returns_400(self, room_client_with_sync) -> None:
+        client, _ = room_client_with_sync
+        resp = client.post(
+            "/api/room/join",
+            content=json.dumps({}),
+            headers={"Content-Type": "application/json"},
+        )
+        assert resp.status_code == 400
+
+    def test_join_without_room_manager_returns_503(self) -> None:
+        with TestClient(app=app) as client:
+            server.room_manager = None
+            resp = client.post(
+                "/api/room/join",
+                content=json.dumps({"code": "any-code-here"}),
+                headers={"Content-Type": "application/json"},
+            )
+            assert resp.status_code == 503
+
+    def test_join_normalizes_code_case(self, room_client_with_sync) -> None:
+        client, sync_redis = room_client_with_sync
+        _create_waiting_room(sync_redis, "red-tiger-paw")
+        resp = client.post(
+            "/api/room/join",
+            content=json.dumps({"code": "RED-TIGER-PAW"}),
+            headers={"Content-Type": "application/json"},
+        )
+        assert resp.status_code == 201
+        assert resp.json()["code"] == "red-tiger-paw"

@@ -174,9 +174,13 @@ document.getElementById('btn-create-room').addEventListener('click', async () =>
     localStorage.setItem('sf_roomCode', data.code);
     localStorage.setItem('sf_playerId', data.playerId);
     localStorage.setItem('sf_playerNum', '1');
-    // Show lobby with room code + URL
+    // Show lobby in "created" mode (P1 perspective)
+    document.getElementById('room-lobby-title').textContent = 'ROOM CREATED';
+    document.getElementById('room-lobby-hint').textContent = 'Share this code with your opponent';
     document.getElementById('room-code-display').textContent = data.code;
     document.getElementById('room-url-display').value = data.url;
+    document.getElementById('room-url-row').classList.remove('hidden');
+    document.getElementById('room-waiting-text').textContent = 'Waiting for opponent...';
     showScreen('roomLobby');
   } catch (err) {
     console.error('[multiplayer] Failed to create room:', err);
@@ -198,17 +202,63 @@ roomCodeInput.addEventListener('input', () => {
   joinGoBtn.disabled = roomCodeInput.value.trim().length < 3;
 });
 
+/** Join a room by code — calls the API, navigates to lobby on success */
+async function joinRoom(code) {
+  const joinError = document.getElementById('join-error');
+  joinError.classList.add('hidden');
+  joinError.textContent = '';
+
+  try {
+    const resp = await fetch('/api/room/join', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code }),
+    });
+
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      const detail = err.detail || `Failed to join (HTTP ${resp.status})`;
+      joinError.textContent = detail;
+      joinError.classList.remove('hidden');
+      return;
+    }
+
+    const data = await resp.json();
+    // Store room info for later WebSocket/WebRTC use
+    localStorage.setItem('sf_roomCode', data.code);
+    localStorage.setItem('sf_playerId', data.playerId);
+    localStorage.setItem('sf_playerNum', data.playerNum);
+
+    // Show lobby in "joined" mode (P2 perspective)
+    document.getElementById('room-lobby-title').textContent = 'ROOM JOINED';
+    document.getElementById('room-lobby-hint').textContent = 'Waiting for both players to select controllers';
+    document.getElementById('room-code-display').textContent = data.code;
+    document.getElementById('room-url-row').classList.add('hidden');
+    document.getElementById('room-waiting-text').textContent = 'Waiting for opponent to be ready...';
+    showScreen('roomLobby');
+  } catch (err) {
+    console.error('[multiplayer] Failed to join room:', err);
+    joinError.textContent = 'Network error — could not reach server';
+    joinError.classList.remove('hidden');
+  }
+}
+
 joinGoBtn.addEventListener('click', () => {
   const code = roomCodeInput.value.trim().toLowerCase();
-  if (code) {
-    // Placeholder — wired up in US-003
-    console.log(`[multiplayer] Join room "${code}" — not yet implemented`);
+  if (code) joinRoom(code);
+});
+
+roomCodeInput.addEventListener('keydown', e => {
+  if (e.code === 'Enter' && !joinGoBtn.disabled) {
+    const code = roomCodeInput.value.trim().toLowerCase();
+    if (code) joinRoom(code);
   }
 });
 
 document.getElementById('btn-join-back').addEventListener('click', () => {
   roomCodeInput.value = '';
   joinGoBtn.disabled = true;
+  document.getElementById('join-error').classList.add('hidden');
   showScreen('multiplayer');
 });
 
@@ -313,9 +363,11 @@ window.addEventListener('keydown', e => {
 // ─────────────────────────────────────────────
 const route = parseRoute();
 if (route.type === 'room') {
+  // Auto-join room from URL — show join screen with code pre-filled, then attempt join
   showScreen('joinRoom');
   roomCodeInput.value = route.code;
   joinGoBtn.disabled = false;
+  joinRoom(route.code);
 } else {
   showScreen('landing');
 }

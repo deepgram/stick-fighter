@@ -415,6 +415,13 @@
       cursor: not-allowed;
     }
 
+    .join-error {
+      font-size: 12px;
+      color: var(--dg-danger);
+      font-weight: bold;
+    }
+    .join-error.hidden { display: none; }
+
     /* ── Room lobby screen ── */
     .room-lobby {
       flex: 1;
@@ -473,6 +480,8 @@
       border-color: var(--dg-primary);
       color: var(--dg-primary);
     }
+
+    .room-url-row.hidden { display: none; }
 
     .room-waiting {
       font-size: 14px;
@@ -541,15 +550,16 @@
     <input type="text" class="room-code-input" id="room-code-input"
       placeholder="red-tiger-paw" autocomplete="off" spellcheck="false">
     <button class="join-btn" id="btn-join-go" disabled>JOIN</button>
+    <p class="join-error hidden" id="join-error"></p>
     <button class="back-btn" id="btn-join-back">← BACK</button>
   </div>
 
-  <!-- Room lobby (after creating a room) -->
+  <!-- Room lobby (after creating or joining a room) -->
   <div class="room-lobby hidden" id="room-lobby">
-    <h2>ROOM CREATED</h2>
-    <p class="join-hint">Share this code with your opponent</p>
+    <h2 id="room-lobby-title">ROOM CREATED</h2>
+    <p class="join-hint" id="room-lobby-hint">Share this code with your opponent</p>
     <div class="room-code-display" id="room-code-display">---</div>
-    <div class="room-url-row">
+    <div class="room-url-row" id="room-url-row">
       <input type="text" class="room-url-input" id="room-url-display" readonly>
       <button class="copy-btn" id="btn-copy-url" title="Copy URL">COPY</button>
     </div>
