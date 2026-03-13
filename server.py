@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs
 
+import asyncpg  # type: ignore[import-untyped]
 import httpx
 import redis.asyncio as aioredis
 from deepgram import AsyncDeepgramClient  # Deepgram SDK v6
@@ -32,7 +33,7 @@ from room_manager import RoomManager
 from game_loop import GameLoopManager
 from signaling import SignalingManager, ICE_SERVERS
 from auth import OIDCConfig, exchange_code, refresh_tokens, fetch_userinfo, extract_user_from_id_token
-from elo import EloManager, controller_to_category
+from elo import EloManager, controller_to_category, ensure_schema
 from room_cleanup import RoomCleanupTask
 from matchmaking import MatchmakingTask
 from characters import CHARACTER_LIST, get_character
@@ -58,15 +59,25 @@ matchmaking_task: MatchmakingTask | None = None
 
 @asynccontextmanager
 async def lifespan(app: Litestar) -> AsyncGenerator[None, None]:
-    """Start/stop the Redis connection pool and game loop manager."""
+    """Start/stop Redis + Postgres pools and background tasks."""
     global room_manager, game_loop_manager, signaling_manager, oidc_config, elo_manager, cleanup_task, matchmaking_task  # noqa: PLW0603
+
+    # Redis — ephemeral state (rooms, matchmaking queue, signaling)
     redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379")
-    pool = aioredis.from_url(redis_url, decode_responses=True)
-    room_manager = RoomManager(pool)
+    redis_pool = aioredis.from_url(redis_url, decode_responses=True)
+    print(f"[redis] Connected to {redis_url}")
+
+    # Postgres — persistent state (ELO, players, match history)
+    database_url = os.environ.get("DATABASE_URL", "postgresql://stick:fighter@localhost:5433/stickfighter")
+    pg_pool = await asyncpg.create_pool(database_url, min_size=2, max_size=10)
+    await ensure_schema(pg_pool)
+    print("[postgres] Connected, schema ensured")
+
+    room_manager = RoomManager(redis_pool)
     game_loop_manager = GameLoopManager()
     signaling_manager = SignalingManager()
     oidc_config = OIDCConfig.from_env()
-    elo_manager = EloManager(pool)
+    elo_manager = EloManager(pg_pool)
     cleanup_task = RoomCleanupTask(room_manager, game_loop_manager, signaling_manager)
     cleanup_task.start()
     matchmaking_task = MatchmakingTask(room_manager, elo_manager)
@@ -75,7 +86,6 @@ async def lifespan(app: Litestar) -> AsyncGenerator[None, None]:
         print(f"[auth] OIDC configured: issuer={oidc_config.issuer}")
     else:
         print("[auth] OIDC not configured (set OIDC_CLIENT_ID to enable login)")
-    print(f"[redis] Connected to {redis_url}")
     try:
         yield
     finally:
@@ -91,7 +101,9 @@ async def lifespan(app: Litestar) -> AsyncGenerator[None, None]:
         signaling_manager = None
         oidc_config = None
         elo_manager = None
-        await pool.aclose()
+        await pg_pool.close()
+        print("[postgres] Connection closed")
+        await redis_pool.aclose()
         room_manager = None
         print("[redis] Connection closed")
 

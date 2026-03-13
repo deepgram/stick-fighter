@@ -11,6 +11,15 @@ RUN uv sync --frozen --no-dev
 
 # Copy application
 COPY server.py .
+COPY auth.py .
+COPY characters.py .
+COPY elo.py .
+COPY game_loop.py .
+COPY matchmaking.py .
+COPY room_cleanup.py .
+COPY room_manager.py .
+COPY signaling.py .
+COPY game_engine/ game_engine/
 COPY index.html .
 COPY src/ src/
 COPY assets/ assets/

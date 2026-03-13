@@ -559,12 +559,12 @@ class TestMatchComplete:
     def test_complete_with_elo_updates_ratings(self, room_client_with_sync) -> None:
         client, sync_redis = room_client_with_sync
         _create_fighting_room(sync_redis, "red-tiger-paw", p1_ctrl="controller", p2_ctrl="controller")
-        # Inject EloManager
-        async_redis = fakeredis.aioredis.FakeRedis(
-            decode_responses=True, server=sync_redis.connection_pool.connection_kwargs.get("server")
-        )
-        elo = EloManager(async_redis)
-        server.elo_manager = elo
+
+        # The lifespan creates a Postgres-backed EloManager.
+        # Use unique user IDs to avoid cross-test interference.
+        import uuid
+        uid1 = f"test-{uuid.uuid4()}"
+        uid2 = f"test-{uuid.uuid4()}"
 
         resp = client.post(
             "/api/match/complete",
@@ -572,8 +572,8 @@ class TestMatchComplete:
                 "code": "red-tiger-paw",
                 "playerId": "p1-uuid",
                 "winner": 1,
-                "p1UserId": "user-aaa",
-                "p2UserId": "user-bbb",
+                "p1UserId": uid1,
+                "p2UserId": uid2,
                 "p1Name": "Alice",
                 "p2Name": "Bob",
             }),

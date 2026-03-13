@@ -1,18 +1,18 @@
-"""ELO rating system with Redis persistence.
+"""ELO rating system with PostgreSQL persistence.
 
 Ratings are stored per-user per-category (voice / keyboard):
-  - Hash ``elo:{user_id}:{category}`` → rating, wins, losses, draws, matches
-  - Sorted set ``leaderboard:{category}`` → user IDs scored by ELO
-  - Hash ``player:{user_id}`` → name (for leaderboard display)
+  - Table ``players`` → user_id, name
+  - Table ``elo_ratings`` → user_id, category, rating, wins, losses, draws, matches
+  - Table ``match_history`` → per-match audit trail
 
-No TTL — ELO data persists indefinitely.
+Leaderboard queries use ``ORDER BY rating DESC`` on the elo_ratings table.
 """
 from __future__ import annotations
 
 import math
 from typing import Any
 
-import redis.asyncio as aioredis  # type: ignore[import-untyped]
+import asyncpg  # type: ignore[import-untyped]
 
 
 # ─────────────────────────────────────────────
@@ -39,22 +39,6 @@ def controller_to_category(controller: str) -> str | None:
     if controller in KEYBOARD_CONTROLLERS:
         return "keyboard"
     return None
-
-
-# ─────────────────────────────────────────────
-# Redis key helpers
-# ─────────────────────────────────────────────
-
-def _elo_key(user_id: str, category: str) -> str:
-    return f"elo:{user_id}:{category}"
-
-
-def _leaderboard_key(category: str) -> str:
-    return f"leaderboard:{category}"
-
-
-def _player_key(user_id: str) -> str:
-    return f"player:{user_id}"
 
 
 # ─────────────────────────────────────────────
@@ -103,14 +87,62 @@ def calculate_elo_change(
 
 
 # ─────────────────────────────────────────────
+# Schema bootstrap
+# ─────────────────────────────────────────────
+
+_SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS players (
+    user_id   TEXT PRIMARY KEY,
+    name      TEXT NOT NULL DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS elo_ratings (
+    user_id   TEXT NOT NULL REFERENCES players(user_id) ON DELETE CASCADE,
+    category  TEXT NOT NULL CHECK (category IN ('voice', 'keyboard')),
+    rating    REAL NOT NULL DEFAULT 1000,
+    wins      INTEGER NOT NULL DEFAULT 0,
+    losses    INTEGER NOT NULL DEFAULT 0,
+    draws     INTEGER NOT NULL DEFAULT 0,
+    matches   INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (user_id, category)
+);
+
+CREATE INDEX IF NOT EXISTS idx_elo_category_rating
+    ON elo_ratings (category, rating DESC);
+
+CREATE TABLE IF NOT EXISTS match_history (
+    id                    SERIAL PRIMARY KEY,
+    winner_id             TEXT REFERENCES players(user_id),
+    loser_id              TEXT REFERENCES players(user_id),
+    category              TEXT NOT NULL CHECK (category IN ('voice', 'keyboard')),
+    winner_rating_before  REAL NOT NULL,
+    loser_rating_before   REAL NOT NULL,
+    winner_rating_after   REAL NOT NULL,
+    loser_rating_after    REAL NOT NULL,
+    draw                  BOOLEAN NOT NULL DEFAULT FALSE,
+    played_at             TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_match_history_played_at
+    ON match_history (played_at DESC);
+"""
+
+
+async def ensure_schema(pool: asyncpg.Pool) -> None:  # type: ignore[type-arg]
+    """Create tables if they don't exist."""
+    async with pool.acquire() as conn:
+        await conn.execute(_SCHEMA_SQL)
+
+
+# ─────────────────────────────────────────────
 # ELO Manager
 # ─────────────────────────────────────────────
 
 class EloManager:
-    """Async Redis-backed ELO rating manager."""
+    """Async PostgreSQL-backed ELO rating manager."""
 
-    def __init__(self, redis: aioredis.Redis) -> None:  # type: ignore[type-arg]
-        self._redis: aioredis.Redis = redis  # type: ignore[type-arg]
+    def __init__(self, pool: asyncpg.Pool) -> None:  # type: ignore[type-arg]
+        self._pool: asyncpg.Pool = pool  # type: ignore[type-arg]
 
     async def get_rating(self, user_id: str, category: str) -> dict[str, Any]:
         """Get a player's rating data for a category.
@@ -118,10 +150,12 @@ class EloManager:
         Returns dict with: user_id, category, rating, wins, losses, draws, matches.
         Returns defaults (rating=1000) if player has no record.
         """
-        key = _elo_key(user_id, category)
-        data = await self._redis.hgetall(key)  # type: ignore[misc]
+        row = await self._pool.fetchrow(
+            "SELECT rating, wins, losses, draws, matches FROM elo_ratings WHERE user_id = $1 AND category = $2",
+            user_id, category,
+        )
 
-        if not data:
+        if row is None:
             return {
                 "user_id": user_id,
                 "category": category,
@@ -135,21 +169,27 @@ class EloManager:
         return {
             "user_id": user_id,
             "category": category,
-            "rating": float(data.get("rating", str(DEFAULT_RATING))),
-            "wins": int(data.get("wins", "0")),
-            "losses": int(data.get("losses", "0")),
-            "draws": int(data.get("draws", "0")),
-            "matches": int(data.get("matches", "0")),
+            "rating": float(row["rating"]),
+            "wins": int(row["wins"]),
+            "losses": int(row["losses"]),
+            "draws": int(row["draws"]),
+            "matches": int(row["matches"]),
         }
 
     async def set_player_name(self, user_id: str, name: str) -> None:
-        """Store/update a player's display name for leaderboard."""
-        await self._redis.hset(_player_key(user_id), "name", name)  # type: ignore[misc]
+        """Store/update a player's display name."""
+        await self._pool.execute(
+            "INSERT INTO players (user_id, name) VALUES ($1, $2) "
+            "ON CONFLICT (user_id) DO UPDATE SET name = $2",
+            user_id, name,
+        )
 
     async def get_player_name(self, user_id: str) -> str:
         """Get a player's display name."""
-        name = await self._redis.hget(_player_key(user_id), "name")  # type: ignore[misc]
-        return str(name) if name else ""
+        row = await self._pool.fetchrow(
+            "SELECT name FROM players WHERE user_id = $1", user_id,
+        )
+        return str(row["name"]) if row else ""
 
     async def update_ratings(
         self,
@@ -158,7 +198,7 @@ class EloManager:
         category: str,
         draw: bool = False,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
-        """Update ratings after a match. Atomic via Redis pipeline.
+        """Update ratings after a match. Atomic via Postgres transaction.
 
         Args:
             winner_id: User ID of the winner (or player A if draw)
@@ -184,31 +224,54 @@ class EloManager:
             winner_rating, loser_rating, winner_matches, loser_matches, result
         )
 
-        # Build update data
-        winner_key = _elo_key(winner_id, category)
-        loser_key = _elo_key(loser_id, category)
-        lb_key = _leaderboard_key(category)
+        # Atomic transaction
+        async with self._pool.acquire() as conn:
+            async with conn.transaction():
+                # Ensure both players exist in players table
+                await conn.execute(
+                    "INSERT INTO players (user_id) VALUES ($1) ON CONFLICT DO NOTHING",
+                    winner_id,
+                )
+                await conn.execute(
+                    "INSERT INTO players (user_id) VALUES ($1) ON CONFLICT DO NOTHING",
+                    loser_id,
+                )
 
-        # Atomic pipeline update
-        pipe = self._redis.pipeline()
-        pipe.hset(winner_key, mapping={  # type: ignore[misc]
-            "rating": str(new_winner_rating),
-            "wins": str(int(winner_stats["wins"]) + (0 if draw else 1)),
-            "losses": str(int(winner_stats["losses"])),
-            "draws": str(int(winner_stats["draws"]) + (1 if draw else 0)),
-            "matches": str(winner_matches + 1),
-        })
-        pipe.hset(loser_key, mapping={  # type: ignore[misc]
-            "rating": str(new_loser_rating),
-            "wins": str(int(loser_stats["wins"])),
-            "losses": str(int(loser_stats["losses"]) + (0 if draw else 1)),
-            "draws": str(int(loser_stats["draws"]) + (1 if draw else 0)),
-            "matches": str(loser_matches + 1),
-        })
-        # Update leaderboard sorted sets
-        pipe.zadd(lb_key, {winner_id: new_winner_rating})  # type: ignore[misc]
-        pipe.zadd(lb_key, {loser_id: new_loser_rating})  # type: ignore[misc]
-        await pipe.execute()  # type: ignore[misc]
+                # Upsert winner
+                await conn.execute(
+                    "INSERT INTO elo_ratings (user_id, category, rating, wins, losses, draws, matches) "
+                    "VALUES ($1, $2, $3, $4, 0, $5, 1) "
+                    "ON CONFLICT (user_id, category) DO UPDATE SET "
+                    "rating = $3, wins = elo_ratings.wins + $4, "
+                    "draws = elo_ratings.draws + $5, matches = elo_ratings.matches + 1",
+                    winner_id, category, new_winner_rating,
+                    0 if draw else 1,  # wins increment
+                    1 if draw else 0,  # draws increment
+                )
+
+                # Upsert loser
+                await conn.execute(
+                    "INSERT INTO elo_ratings (user_id, category, rating, wins, losses, draws, matches) "
+                    "VALUES ($1, $2, $3, 0, $4, $5, 1) "
+                    "ON CONFLICT (user_id, category) DO UPDATE SET "
+                    "rating = $3, losses = elo_ratings.losses + $4, "
+                    "draws = elo_ratings.draws + $5, matches = elo_ratings.matches + 1",
+                    loser_id, category, new_loser_rating,
+                    0 if draw else 1,  # losses increment
+                    1 if draw else 0,  # draws increment
+                )
+
+                # Record match history
+                await conn.execute(
+                    "INSERT INTO match_history "
+                    "(winner_id, loser_id, category, winner_rating_before, loser_rating_before, "
+                    "winner_rating_after, loser_rating_after, draw) "
+                    "VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+                    winner_id, loser_id, category,
+                    winner_rating, loser_rating,
+                    new_winner_rating, new_loser_rating,
+                    draw,
+                )
 
         # Return updated stats
         winner_new = {
@@ -248,34 +311,44 @@ class EloManager:
         Returns:
             List of dicts with: rank, user_id, name, rating, wins, losses, draws, matches
         """
-        lb_key = _leaderboard_key(category)
-
-        # ZREVRANGE returns highest scores first
-        entries = await self._redis.zrevrange(  # type: ignore[misc]
-            lb_key, offset, offset + limit - 1, withscores=True
+        rows = await self._pool.fetch(
+            "SELECT e.user_id, COALESCE(p.name, '') AS name, "
+            "e.rating, e.wins, e.losses, e.draws, e.matches "
+            "FROM elo_ratings e "
+            "LEFT JOIN players p ON p.user_id = e.user_id "
+            "WHERE e.category = $1 "
+            "ORDER BY e.rating DESC "
+            "LIMIT $2 OFFSET $3",
+            category, limit, offset,
         )
 
-        result: list[dict[str, Any]] = []
-        for rank_idx, (user_id, score) in enumerate(entries):
-            name = await self.get_player_name(user_id)
-            stats = await self.get_rating(user_id, category)
-            result.append({
-                "rank": offset + rank_idx + 1,
-                "user_id": str(user_id),
-                "name": name,
-                "rating": float(score),
-                "wins": int(stats["wins"]),
-                "losses": int(stats["losses"]),
-                "draws": int(stats["draws"]),
-                "matches": int(stats["matches"]),
-            })
-
-        return result
+        return [
+            {
+                "rank": offset + i + 1,
+                "user_id": str(row["user_id"]),
+                "name": str(row["name"]),
+                "rating": float(row["rating"]),
+                "wins": int(row["wins"]),
+                "losses": int(row["losses"]),
+                "draws": int(row["draws"]),
+                "matches": int(row["matches"]),
+            }
+            for i, row in enumerate(rows)
+        ]
 
     async def get_player_rank(self, user_id: str, category: str) -> int | None:
         """Get a player's rank (1-based) in a category. Returns None if not ranked."""
-        lb_key = _leaderboard_key(category)
-        rank = await self._redis.zrevrank(lb_key, user_id)  # type: ignore[misc]
-        if rank is None:
+        row = await self._pool.fetchrow(
+            "SELECT COUNT(*) + 1 AS rank FROM elo_ratings "
+            "WHERE category = $1 AND rating > "
+            "(SELECT rating FROM elo_ratings WHERE user_id = $2 AND category = $1)",
+            category, user_id,
+        )
+        # Check player actually has a rating in this category
+        exists = await self._pool.fetchrow(
+            "SELECT 1 FROM elo_ratings WHERE user_id = $1 AND category = $2",
+            user_id, category,
+        )
+        if exists is None:
             return None
-        return int(rank) + 1  # Convert 0-based to 1-based
+        return int(row["rank"]) if row else None

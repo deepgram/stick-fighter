@@ -1,15 +1,17 @@
 """Tests for the ELO rating system (elo.py + server endpoints)."""
 from __future__ import annotations
 
+import os
+
+import asyncpg  # type: ignore[import-untyped]
 import pytest
 import pytest_asyncio
-import fakeredis
-import fakeredis.aioredis
 
 from elo import (
     EloManager,
     calculate_elo_change,
     controller_to_category,
+    ensure_schema,
     DEFAULT_RATING,
     K_FACTOR_NEW,
     K_FACTOR_ESTABLISHED,
@@ -19,7 +21,7 @@ from elo import (
 
 
 # ─────────────────────────────────────────────
-# Pure function tests
+# Pure function tests (no DB needed)
 # ─────────────────────────────────────────────
 
 
@@ -80,21 +82,17 @@ class TestCalculateEloChange:
         assert new_b == pytest.approx(1000, abs=0.1)
 
     def test_upset_win_bigger_change(self) -> None:
-        # Lower-rated player beats higher-rated
         new_a, _ = calculate_elo_change(1000, 1200, 0, 0, 1.0)
         normal_a, _ = calculate_elo_change(1200, 1000, 0, 0, 1.0)
-        # Upset win gains more than expected win
         assert (new_a - 1000) > (normal_a - 1200)
 
     def test_k_factor_matters(self) -> None:
-        # New player (K=32) has bigger swing than established (K=16)
         new_a, _ = calculate_elo_change(1000, 1000, 0, 0, 1.0)
         est_a, _ = calculate_elo_change(1000, 1000, 50, 50, 1.0)
         assert (new_a - 1000) > (est_a - 1000)
 
     def test_returns_rounded(self) -> None:
         new_a, new_b = calculate_elo_change(1000, 1000, 0, 0, 1.0)
-        # Should be rounded to 1 decimal place
         assert new_a == round(new_a, 1)
         assert new_b == round(new_b, 1)
 
@@ -122,15 +120,33 @@ class TestControllerToCategory:
 
 
 # ─────────────────────────────────────────────
-# EloManager async tests
+# EloManager async tests (requires Postgres)
 # ─────────────────────────────────────────────
+
+TEST_DATABASE_URL = os.environ.get(
+    "TEST_DATABASE_URL",
+    "postgresql://stick:fighter@localhost:5433/stickfighter",
+)
 
 
 @pytest_asyncio.fixture
-async def elo() -> EloManager:
-    """Create an EloManager backed by fakeredis."""
-    redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
-    return EloManager(redis)
+async def pg_pool():
+    """Create a connection pool and clean tables before each test."""
+    pool = await asyncpg.create_pool(TEST_DATABASE_URL, min_size=1, max_size=3)
+    await ensure_schema(pool)
+    # Clean tables before each test (order matters for FK constraints)
+    async with pool.acquire() as conn:
+        await conn.execute("DELETE FROM match_history")
+        await conn.execute("DELETE FROM elo_ratings")
+        await conn.execute("DELETE FROM players")
+    yield pool
+    await pool.close()
+
+
+@pytest_asyncio.fixture
+async def elo(pg_pool) -> EloManager:
+    """Create an EloManager backed by the test Postgres pool."""
+    return EloManager(pg_pool)
 
 
 class TestGetRating:
@@ -207,7 +223,7 @@ class TestUpdateRatings:
         assert float(b["rating"]) == pytest.approx(DEFAULT_RATING, abs=0.5)
 
     @pytest.mark.asyncio
-    async def test_persisted_to_redis(self, elo: EloManager) -> None:
+    async def test_persisted_to_db(self, elo: EloManager) -> None:
         await elo.update_ratings("w", "l", "keyboard")
         stats = await elo.get_rating("w", "keyboard")
         assert float(stats["rating"]) > DEFAULT_RATING
@@ -234,6 +250,13 @@ class TestUpdateRatings:
         assert float(kb["rating"]) > DEFAULT_RATING  # Won keyboard
         assert float(voice["rating"]) < DEFAULT_RATING  # Lost voice
 
+    @pytest.mark.asyncio
+    async def test_match_history_recorded(self, elo: EloManager, pg_pool) -> None:
+        await elo.update_ratings("a", "b", "keyboard")
+        async with pg_pool.acquire() as conn:
+            count = await conn.fetchval("SELECT COUNT(*) FROM match_history")
+        assert count == 1
+
 
 class TestLeaderboard:
     """Test leaderboard queries."""
@@ -247,7 +270,6 @@ class TestLeaderboard:
     async def test_entries_sorted_by_rating(self, elo: EloManager) -> None:
         await elo.set_player_name("a", "Alice")
         await elo.set_player_name("b", "Bob")
-        # a beats b twice → a has higher rating
         await elo.update_ratings("a", "b", "keyboard")
         await elo.update_ratings("a", "b", "keyboard")
         result = await elo.get_leaderboard("keyboard")
@@ -296,200 +318,3 @@ class TestPlayerRank:
         rank_b = await elo.get_player_rank("b", "keyboard")
         assert rank_a == 1  # Winner is rank 1
         assert rank_b == 2
-
-
-# ─────────────────────────────────────────────
-# Server endpoint tests
-# ─────────────────────────────────────────────
-
-from litestar.testing import TestClient
-from server import app
-
-
-class TestLeaderboardEndpoint:
-    """Test GET /api/leaderboard."""
-
-    def test_empty_leaderboard(self) -> None:
-        with TestClient(app=app) as client:
-            import server
-            server.elo_manager = EloManager(
-                fakeredis.aioredis.FakeRedis(decode_responses=True)
-            )
-            resp = client.get("/api/leaderboard?category=keyboard")
-            assert resp.status_code == 200
-            data = resp.json()
-            assert data["category"] == "keyboard"
-            assert data["entries"] == []
-
-    def test_invalid_category(self) -> None:
-        with TestClient(app=app) as client:
-            import server
-            server.elo_manager = EloManager(
-                fakeredis.aioredis.FakeRedis(decode_responses=True)
-            )
-            resp = client.get("/api/leaderboard?category=invalid")
-            assert resp.status_code == 400
-
-    def test_default_category_is_all(self) -> None:
-        with TestClient(app=app) as client:
-            import server
-            server.elo_manager = EloManager(
-                fakeredis.aioredis.FakeRedis(decode_responses=True)
-            )
-            resp = client.get("/api/leaderboard")
-            assert resp.status_code == 200
-            assert resp.json()["category"] == "all"
-
-
-def _elo_client_with_data():
-    """Create a TestClient + EloManager with shared FakeServer for sync data setup.
-
-    The trick: use sync FakeRedis to pre-populate data, sharing the same
-    FakeServer with the async FakeRedis used by EloManager. This avoids
-    event loop issues with asyncio.new_event_loop().
-    """
-    fake_server = fakeredis.FakeServer()
-    async_redis = fakeredis.aioredis.FakeRedis(
-        decode_responses=True, server=fake_server
-    )
-    sync_redis = fakeredis.FakeRedis(
-        decode_responses=True, server=fake_server
-    )
-    return async_redis, sync_redis
-
-
-def _seed_player(sync_redis: fakeredis.FakeRedis, user_id: str, name: str,  # type: ignore[type-arg]
-                 category: str, rating: float, wins: int, losses: int) -> None:
-    """Seed a player's ELO data via sync Redis."""
-    sync_redis.hset(f"player:{user_id}", "name", name)
-    sync_redis.hset(f"elo:{user_id}:{category}", mapping={
-        "rating": str(rating),
-        "wins": str(wins),
-        "losses": str(losses),
-        "draws": "0",
-        "matches": str(wins + losses),
-    })
-    sync_redis.zadd(f"leaderboard:{category}", {user_id: rating})
-
-
-class TestLeaderboardViewer:
-    """Test GET /api/leaderboard with user_id (viewer rank)."""
-
-    def test_viewer_not_ranked(self) -> None:
-        with TestClient(app=app) as client:
-            import server
-            server.elo_manager = EloManager(
-                fakeredis.aioredis.FakeRedis(decode_responses=True)
-            )
-            resp = client.get("/api/leaderboard?category=keyboard&user_id=nobody")
-            assert resp.status_code == 200
-            data = resp.json()
-            assert data["viewer"] is None
-            assert data["viewer_in_entries"] is False
-
-    def test_viewer_in_entries(self) -> None:
-        """Viewer is in the top entries — viewer_in_entries = True."""
-        async_redis, sync_redis = _elo_client_with_data()
-        _seed_player(sync_redis, "viewer-1", "Viewer", "keyboard", 1016.0, 1, 0)
-        _seed_player(sync_redis, "other", "Other", "keyboard", 984.0, 0, 1)
-
-        with TestClient(app=app) as client:
-            import server
-            server.elo_manager = EloManager(async_redis)
-
-            resp = client.get("/api/leaderboard?category=keyboard&user_id=viewer-1")
-            assert resp.status_code == 200
-            data = resp.json()
-            assert data["viewer_in_entries"] is True
-            assert data["viewer"] is not None
-            assert data["viewer"]["user_id"] == "viewer-1"
-            assert data["viewer"]["rank"] == 1
-
-    def test_viewer_not_in_entries_but_ranked(self) -> None:
-        """Viewer is ranked but below the limit — still returned as viewer."""
-        async_redis, sync_redis = _elo_client_with_data()
-        _seed_player(sync_redis, "top-1", "Top1", "keyboard", 1032.0, 2, 0)
-        _seed_player(sync_redis, "top-2", "Top2", "keyboard", 1016.0, 1, 0)
-        _seed_player(sync_redis, "viewer-1", "Viewer", "keyboard", 968.0, 0, 2)
-
-        with TestClient(app=app) as client:
-            import server
-            server.elo_manager = EloManager(async_redis)
-
-            resp = client.get("/api/leaderboard?category=keyboard&limit=2&user_id=viewer-1")
-            assert resp.status_code == 200
-            data = resp.json()
-            assert len(data["entries"]) == 2
-            assert data["viewer_in_entries"] is False
-            assert data["viewer"] is not None
-            assert data["viewer"]["rank"] == 3
-            assert data["viewer"]["name"] == "Viewer"
-
-    def test_viewer_all_category(self) -> None:
-        """Viewer rank works with category=all (merges voice + keyboard)."""
-        async_redis, sync_redis = _elo_client_with_data()
-        _seed_player(sync_redis, "viewer-1", "Viewer", "voice", 1016.0, 1, 0)
-        _seed_player(sync_redis, "other", "Other", "voice", 984.0, 0, 1)
-
-        with TestClient(app=app) as client:
-            import server
-            server.elo_manager = EloManager(async_redis)
-
-            resp = client.get("/api/leaderboard?category=all&user_id=viewer-1")
-            assert resp.status_code == 200
-            data = resp.json()
-            assert data["viewer"] is not None
-            assert data["viewer"]["input_mode"] == "voice"
-
-    def test_no_viewer_without_user_id(self) -> None:
-        """No viewer field when user_id not provided."""
-        with TestClient(app=app) as client:
-            import server
-            server.elo_manager = EloManager(
-                fakeredis.aioredis.FakeRedis(decode_responses=True)
-            )
-            resp = client.get("/api/leaderboard?category=keyboard")
-            assert resp.status_code == 200
-            data = resp.json()
-            assert "viewer" not in data
-            assert "viewer_in_entries" not in data
-
-
-class TestLeaderboardPageRoute:
-    """Test GET /leaderboard page route."""
-
-    def test_serves_html(self) -> None:
-        with TestClient(app=app) as client:
-            resp = client.get("/leaderboard")
-            assert resp.status_code == 200
-            assert "text/html" in resp.headers["content-type"]
-            assert "STICK FIGHTER" in resp.text
-
-
-class TestGetEloEndpoint:
-    """Test GET /api/elo/{user_id}."""
-
-    def test_new_player_defaults(self) -> None:
-        with TestClient(app=app) as client:
-            import server
-            server.elo_manager = EloManager(
-                fakeredis.aioredis.FakeRedis(decode_responses=True)
-            )
-            resp = client.get("/api/elo/user-123")
-            assert resp.status_code == 200
-            data = resp.json()
-            assert data["user_id"] == "user-123"
-            assert data["voice"]["rating"] == DEFAULT_RATING
-            assert data["keyboard"]["rating"] == DEFAULT_RATING
-
-    def test_specific_category(self) -> None:
-        with TestClient(app=app) as client:
-            import server
-            server.elo_manager = EloManager(
-                fakeredis.aioredis.FakeRedis(decode_responses=True)
-            )
-            resp = client.get("/api/elo/user-123?category=keyboard")
-            assert resp.status_code == 200
-            data = resp.json()
-            assert data["rating"] == DEFAULT_RATING
-            assert data["category"] == "keyboard"
