@@ -3,10 +3,10 @@
   "sessionId": "c3614eb9-d39b-4e7a-b069-fb1bdd08a70c",
   "status": "running",
   "startedAt": "2026-03-13T14:38:07.817Z",
-  "updatedAt": "2026-03-13T16:54:26.053Z",
-  "currentIteration": 15,
+  "updatedAt": "2026-03-13T17:02:36.602Z",
+  "currentIteration": 16,
   "maxIterations": 0,
-  "tasksCompleted": 15,
+  "tasksCompleted": 16,
   "isPaused": false,
   "agentPlugin": "claude",
   "trackerState": {
@@ -113,8 +113,8 @@
       {
         "id": "stick-fighter-d4c.16",
         "title": "US-015: ELO matchmaking queue",
-        "status": "open",
-        "completedInSession": false
+        "status": "completed",
+        "completedInSession": true
       },
       {
         "id": "stick-fighter-d4c.15",
@@ -274,6 +274,16 @@
       "durationMs": 386070,
       "startedAt": "2026-03-13T16:34:19.380Z",
       "endedAt": "2026-03-13T16:40:45.450Z"
+    },
+    {
+      "iteration": 16,
+      "status": "completed",
+      "taskId": "stick-fighter-d4c.16",
+      "taskTitle": "US-015: ELO matchmaking queue",
+      "taskCompleted": true,
+      "durationMs": 818713,
+      "startedAt": "2026-03-13T16:40:47.216Z",
+      "endedAt": "2026-03-13T16:54:25.929Z"
     }
   ],
   "skippedTaskIds": [],

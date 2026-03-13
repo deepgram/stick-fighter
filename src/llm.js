@@ -11,9 +11,10 @@ const MAX_HISTORY = 10;       // max messages in conversation
 const MOVE_INTERVAL = 1000;   // ms between executing each move from the plan
 
 export class LLMAdapter {
-  constructor(player, provider = 'anthropic') {
+  constructor(player, provider = 'anthropic', character = null) {
     this.player = player;
     this.provider = provider;
+    this.character = character;
     this.command = new CommandAdapter();
     this.game = null;
     this._running = false;
@@ -151,10 +152,12 @@ export class LLMAdapter {
       }
 
       const t0 = performance.now();
+      const body = { provider: this.provider, messages: this._messages };
+      if (this.character) body.character = this.character;
       const resp = await fetch('/api/llm/command', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ provider: this.provider, messages: this._messages }),
+        body: JSON.stringify(body),
       });
       const elapsed = performance.now() - t0;
 

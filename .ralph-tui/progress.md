@@ -31,6 +31,7 @@ after each iteration and it's included in prompts for context.
 - **Leaderboard viewer pattern**: `/api/leaderboard?user_id=X` returns `viewer` (user's own rank/stats) and `viewer_in_entries` (bool). For "all" category, picks user's best-rated category. Frontend highlights viewer's row in table and shows a separate viewer row when they're below the limit.
 - **Sync Redis seed helpers for ELO tests**: `_elo_client_with_data()` returns `(async_redis, sync_redis)` sharing a `FakeServer`. `_seed_player()` writes directly to Redis hashes + sorted sets. Avoids `asyncio.new_event_loop()` issues.
 - **Matchmaking pattern**: `matchmaking.py` has `MatchmakingTask` (background asyncio task). In-memory `_entries` dict for queue, `_matches` dict for results. Periodic `try_match()` groups by category, sorts by ELO, matches closest pairs within widening threshold. Room auto-created on match. Status polling refreshes both in-memory `refreshed_at` and Redis TTL. Server has `mm_client` fixture for endpoint tests.
+- **Character personality pattern**: `characters.py` defines AI opponents as `Character` dataclass entries in a `CHARACTERS` dict. Each has a `personality_prompt` appended to the base `LLM_FIGHTER_SYSTEM`. The `character` field in `/api/llm/command` determines both provider and system prompt — no client-side provider logic needed. New characters are added by creating a config entry only.
 
 ---
 
@@ -420,4 +421,33 @@ after each iteration and it's included in prompts for context.
   - Room creation in matchmaking requires the full status chain: waiting → selecting → fighting (can't skip statuses)
   - `controller_to_category()` returning None for SIM/LLM is a natural gate for matchmaking eligibility — reuse existing ELO module logic
   - "Play while you wait" needs careful state management: the matchmaking poll timer must survive screen transitions while the SIM fight runs
+---
+
+## 2026-03-13 - stick-fighter-d4c.15
+- Implemented single-player LLM character selection (US-017)
+- Created `characters.py` module with `Character` dataclass and personality-specific system prompts
+- Two AI characters: "Haiku the Swift" (Claude Haiku, aggressive) and "GPT the Tank" (GPT-4o, defensive)
+- Each character has: id, name, provider, icon, description, personality_prompt
+- Personality prompt appended to base `LLM_FIGHTER_SYSTEM` — characters share game mechanics knowledge but have distinct fighting styles
+- `character` field in `/api/llm/command` determines provider AND system prompt (overrides client-sent `provider`)
+- GET `/api/characters` returns character list for the selection UI (excludes personality_prompt from response)
+- Character select screen: cards with icon, name, provider badge, description; click to select, FIGHT to start
+- "Classic mode" link bypasses character select for the original free-form P1/P2 mode selection
+- `LLMAdapter` accepts optional `character` parameter, included in API request body
+- After character fight ends, Enter returns to character select (not onboarding)
+- 17 new Python tests (character definitions, list endpoint, character-aware LLM endpoint with mocked providers)
+- 4 new JS tests (LLMAdapter character constructor, request body with/without character)
+- Files changed:
+  - `characters.py` — New: Character dataclass, CHARACTERS dict, CHARACTER_LIST, get_character()
+  - `server.py` — Added characters import, GET `/api/characters` endpoint, character-aware `llm_command` (builds system prompt, overrides provider), `_llm_anthropic`/`_llm_openai` accept system_prompt param
+  - `index.html` — Added character-select screen div + CSS (char-card, char-icon, char-name, char-provider, char-desc)
+  - `src/llm.js` — LLMAdapter constructor accepts `character`, `_requestPlan` includes `character` in request body
+  - `src/main.js` — Added characterSelect screen, showCharacterSelect(), renderCharacterCards(), startCharacterFight(), classic mode link, ESC handler, post-fight routing
+  - `tests/test_characters.py` — New: 17 tests across 3 test classes
+  - `tests/characters.test.js` — New: 4 tests for LLMAdapter character support
+- **Learnings:**
+  - Character personality as a prompt suffix (appended to base system prompt) is the cleanest extensibility pattern — new characters need only a config entry, no code changes
+  - Character `provider` field overriding client-sent provider means the server is the authority on which LLM to use — prevents client mismatch
+  - `personality_prompt` must NOT be exposed in the `/api/characters` response — it's a server-side detail and would reveal system prompt internals
+  - The `selectedCharacter` state variable serves double duty: tracks selection AND distinguishes "character fight" from "classic fight" for post-game routing
 ---

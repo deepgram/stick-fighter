@@ -23,6 +23,7 @@ const screens = {
   matchmaking: document.getElementById('matchmaking'),
   leaderboard: document.getElementById('leaderboard'),
   matchResults: document.getElementById('match-results'),
+  characterSelect: document.getElementById('character-select'),
   onboarding: document.getElementById('onboarding'),
 };
 
@@ -86,7 +87,7 @@ function showScreen(name) {
 }
 
 /** Create an InputManager with the right adapter for a mode */
-function createInput(playerNum, modeIdx, providerIdx) {
+function createInput(playerNum, modeIdx, providerIdx, character = null) {
   const manager = new InputManager();
   const mode = INPUT_MODES[modeIdx].id;
 
@@ -109,7 +110,7 @@ function createInput(playerNum, modeIdx, providerIdx) {
     activeAdapters.push(adapter);
   } else if (mode === 'llm') {
     const provider = LLM_PROVIDERS[providerIdx]?.id || 'anthropic';
-    const adapter = new LLMAdapter(playerNum, provider);
+    const adapter = new LLMAdapter(playerNum, provider, character);
     manager.addAdapter(adapter);
     activeAdapters.push(adapter);
   }
@@ -181,7 +182,7 @@ async function startFight() {
 // Landing page click handlers
 // ─────────────────────────────────────────────
 document.getElementById('btn-multiplayer').addEventListener('click', () => showScreen('multiplayer'));
-document.getElementById('btn-singleplayer').addEventListener('click', () => showScreen('onboarding'));
+document.getElementById('btn-singleplayer').addEventListener('click', () => showCharacterSelect());
 
 // Multiplayer menu
 document.getElementById('btn-create-room').addEventListener('click', async () => {
@@ -974,6 +975,103 @@ document.getElementById('btn-mm-back').addEventListener('click', () => {
 });
 
 // ─────────────────────────────────────────────
+// Character select (single-player AI opponent)
+// ─────────────────────────────────────────────
+let selectedCharacter = null;
+let characterList = [];
+
+/** Fetch characters from server and show the character select screen */
+async function showCharacterSelect() {
+  showScreen('characterSelect');
+  const fightBtn = document.getElementById('btn-char-fight');
+  fightBtn.disabled = true;
+  selectedCharacter = null;
+
+  try {
+    if (characterList.length === 0) {
+      const resp = await fetch('/api/characters');
+      if (resp.ok) characterList = await resp.json();
+    }
+    renderCharacterCards();
+  } catch (err) {
+    console.error('[character-select] Failed to load characters:', err);
+  }
+}
+
+/** Render character cards into the grid */
+function renderCharacterCards() {
+  const container = document.getElementById('char-cards');
+  container.innerHTML = characterList.map(c => `
+    <button class="char-card${selectedCharacter === c.id ? ' selected' : ''}" data-char="${c.id}">
+      <div class="char-icon">${c.icon}</div>
+      <div class="char-name">${escapeHtml(c.name)}</div>
+      <div class="char-provider">Powered by ${escapeHtml(c.provider)}</div>
+      <div class="char-desc">${escapeHtml(c.description)}</div>
+    </button>
+  `).join('');
+
+  // Attach click listeners
+  container.querySelectorAll('.char-card').forEach(card => {
+    card.addEventListener('click', () => {
+      selectedCharacter = card.dataset.char;
+      container.querySelectorAll('.char-card').forEach(c => c.classList.remove('selected'));
+      card.classList.add('selected');
+      document.getElementById('btn-char-fight').disabled = false;
+    });
+  });
+}
+
+/** Start a fight against the selected character */
+async function startCharacterFight() {
+  if (!selectedCharacter) return;
+
+  const char = characterList.find(c => c.id === selectedCharacter);
+  if (!char) return;
+
+  state = 'fighting';
+  screens.characterSelect.classList.add('hidden');
+  canvas.classList.add('active');
+  resize();
+
+  // P1 uses keyboard, P2 is the selected LLM character
+  p1Input = createInput(1, 0, 0); // keyboard
+  const p2Manager = new InputManager();
+  const adapter = new LLMAdapter(2, char.provider, char.id);
+  p2Manager.addAdapter(adapter);
+  activeAdapters.push(adapter);
+  p2Input = p2Manager;
+
+  // Preload SFX + wait for adapters
+  const readyPromises = [sfx.preload()];
+  for (const a of activeAdapters) {
+    if (a.waitUntilReady) readyPromises.push(a.waitUntilReady());
+  }
+
+  // Start game loop
+  const p1Label = 'Keyboard';
+  const p2Label = char.name;
+  game = new Game(canvas, p1Input, p2Input, sfx, { p1Label, p2Label });
+  game.start();
+
+  // Wire adapter game ref
+  for (const a of activeAdapters) {
+    if (a.setGameRef) a.setGameRef(game);
+  }
+
+  window._game = game;
+
+  await Promise.all(readyPromises);
+  game.showFightAlert();
+}
+
+document.getElementById('btn-char-fight').addEventListener('click', () => startCharacterFight());
+document.getElementById('btn-char-classic').addEventListener('click', () => {
+  selectedCharacter = null;
+  showScreen('onboarding');
+});
+document.getElementById('btn-char-back').addEventListener('click', () => showScreen('landing'));
+
+// ─────────────────────────────────────────────
 // Leaderboard
 // ─────────────────────────────────────────────
 let lbCategory = 'all';
@@ -1153,8 +1251,14 @@ window.addEventListener('keydown', e => {
         cleanupAdapters();
         mmWaitingGame = false;
         showScreen('matchmaking');
+      } else if (selectedCharacter) {
+        // Character fight: Enter goes back to character select
+        if (game) { game.running = false; game = null; }
+        cleanupAdapters();
+        p1Input = null; p2Input = null;
+        showCharacterSelect();
       } else {
-        // Single-player: Enter restarts
+        // Classic single-player: Enter restarts
         showOnboarding();
       }
     }
@@ -1180,6 +1284,7 @@ window.addEventListener('keydown', e => {
     }
     else if (state === 'leaderboard') showScreen('landing');
     else if (state === 'matchResults') showLanding();
+    else if (state === 'characterSelect') showScreen('landing');
     else if (state === 'onboarding') showScreen('landing');
   }
 });

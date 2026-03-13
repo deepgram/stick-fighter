@@ -35,6 +35,7 @@ from auth import OIDCConfig, exchange_code, refresh_tokens, fetch_userinfo, extr
 from elo import EloManager, controller_to_category
 from room_cleanup import RoomCleanupTask
 from matchmaking import MatchmakingTask
+from characters import CHARACTER_LIST, get_character
 
 # ─────────────────────────────────────────────
 # Config
@@ -298,14 +299,40 @@ RESPOND WITH ONLY A JSON ARRAY OF 5 MOVES. Example: ["dash forward", "forward", 
 No explanation, no markdown, no code fences. Just the JSON array."""
 
 
+@get("/api/characters")
+async def list_characters() -> list[dict[str, str]]:
+    """Return available AI characters for single-player mode."""
+    return [
+        {
+            "id": c.id,
+            "name": c.name,
+            "provider": c.provider,
+            "icon": c.icon,
+            "description": c.description,
+        }
+        for c in CHARACTER_LIST
+    ]
+
+
 @post("/api/llm/command")
 async def llm_command(data: dict[str, Any]) -> dict:
     """Send game state to LLM, return a 5-move plan. Supports multiple providers."""
     provider = data.get("provider", "anthropic")
     messages = data.get("messages", [])
+    character_id = data.get("character")
+
+    # Build system prompt: base + optional character personality
+    system_prompt = LLM_FIGHTER_SYSTEM
+    if character_id:
+        char = get_character(character_id)
+        if char:
+            system_prompt = LLM_FIGHTER_SYSTEM + char.personality_prompt
+            provider = char.provider  # character determines provider
 
     # Log outgoing request
     print(f"[llm-fighter:{provider}] ─── REQUEST ───")
+    if character_id:
+        print(f"[llm-fighter:{provider}] character: {character_id}")
     print(f"[llm-fighter:{provider}] messages ({len(messages)}):")
     for msg in messages[-4:]:
         role = msg.get("role", "?")
@@ -315,9 +342,9 @@ async def llm_command(data: dict[str, Any]) -> dict:
         print(f"[llm-fighter:{provider}]   ... ({len(messages) - 4} earlier messages omitted)")
 
     if provider == "openai":
-        text = await _llm_openai(messages)
+        text = await _llm_openai(messages, system_prompt)
     else:
-        text = await _llm_anthropic(messages)
+        text = await _llm_anthropic(messages, system_prompt)
 
     # Parse JSON array of moves
     raw = text.strip()
@@ -344,7 +371,7 @@ async def llm_command(data: dict[str, Any]) -> dict:
     return {"plan": plan}
 
 
-async def _llm_anthropic(messages: list[dict]) -> str:
+async def _llm_anthropic(messages: list[dict], system_prompt: str = LLM_FIGHTER_SYSTEM) -> str:
     """Call Anthropic Claude Haiku 4.5."""
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
@@ -361,7 +388,7 @@ async def _llm_anthropic(messages: list[dict]) -> str:
             json={
                 "model": "claude-haiku-4-5-20251001",
                 "max_tokens": 150,
-                "system": LLM_FIGHTER_SYSTEM,
+                "system": system_prompt,
                 "messages": messages,
             },
         )
@@ -384,14 +411,14 @@ async def _llm_anthropic(messages: list[dict]) -> str:
     return text
 
 
-async def _llm_openai(messages: list[dict]) -> str:
+async def _llm_openai(messages: list[dict], system_prompt: str = LLM_FIGHTER_SYSTEM) -> str:
     """Call OpenAI GPT-4o mini."""
     api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
         raise HTTPException(status_code=500, detail="OPENAI_API_KEY not set")
 
     # OpenAI uses system message in the messages array
-    oai_messages = [{"role": "system", "content": LLM_FIGHTER_SYSTEM}] + messages
+    oai_messages = [{"role": "system", "content": system_prompt}] + messages
 
     async with httpx.AsyncClient(timeout=10) as client:
         resp = await client.post(
@@ -1624,6 +1651,7 @@ app = Litestar(
         signal_send,
         signal_listen,
         stt_proxy,
+        list_characters,
         llm_command,
         voice_llm,
         voice_tts,
