@@ -31,4 +31,8 @@ describe('parseRoute', () => {
   it('returns home for /room/ with no code', () => {
     expect(parseRoute('/room/')).toEqual({ type: 'home' });
   });
+
+  it('parses leaderboard route', () => {
+    expect(parseRoute('/leaderboard')).toEqual({ type: 'leaderboard' });
+  });
 });

@@ -341,6 +341,131 @@ class TestLeaderboardEndpoint:
             assert resp.json()["category"] == "all"
 
 
+def _elo_client_with_data():
+    """Create a TestClient + EloManager with shared FakeServer for sync data setup.
+
+    The trick: use sync FakeRedis to pre-populate data, sharing the same
+    FakeServer with the async FakeRedis used by EloManager. This avoids
+    event loop issues with asyncio.new_event_loop().
+    """
+    fake_server = fakeredis.FakeServer()
+    async_redis = fakeredis.aioredis.FakeRedis(
+        decode_responses=True, server=fake_server
+    )
+    sync_redis = fakeredis.FakeRedis(
+        decode_responses=True, server=fake_server
+    )
+    return async_redis, sync_redis
+
+
+def _seed_player(sync_redis: fakeredis.FakeRedis, user_id: str, name: str,  # type: ignore[type-arg]
+                 category: str, rating: float, wins: int, losses: int) -> None:
+    """Seed a player's ELO data via sync Redis."""
+    sync_redis.hset(f"player:{user_id}", "name", name)
+    sync_redis.hset(f"elo:{user_id}:{category}", mapping={
+        "rating": str(rating),
+        "wins": str(wins),
+        "losses": str(losses),
+        "draws": "0",
+        "matches": str(wins + losses),
+    })
+    sync_redis.zadd(f"leaderboard:{category}", {user_id: rating})
+
+
+class TestLeaderboardViewer:
+    """Test GET /api/leaderboard with user_id (viewer rank)."""
+
+    def test_viewer_not_ranked(self) -> None:
+        with TestClient(app=app) as client:
+            import server
+            server.elo_manager = EloManager(
+                fakeredis.aioredis.FakeRedis(decode_responses=True)
+            )
+            resp = client.get("/api/leaderboard?category=keyboard&user_id=nobody")
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["viewer"] is None
+            assert data["viewer_in_entries"] is False
+
+    def test_viewer_in_entries(self) -> None:
+        """Viewer is in the top entries — viewer_in_entries = True."""
+        async_redis, sync_redis = _elo_client_with_data()
+        _seed_player(sync_redis, "viewer-1", "Viewer", "keyboard", 1016.0, 1, 0)
+        _seed_player(sync_redis, "other", "Other", "keyboard", 984.0, 0, 1)
+
+        with TestClient(app=app) as client:
+            import server
+            server.elo_manager = EloManager(async_redis)
+
+            resp = client.get("/api/leaderboard?category=keyboard&user_id=viewer-1")
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["viewer_in_entries"] is True
+            assert data["viewer"] is not None
+            assert data["viewer"]["user_id"] == "viewer-1"
+            assert data["viewer"]["rank"] == 1
+
+    def test_viewer_not_in_entries_but_ranked(self) -> None:
+        """Viewer is ranked but below the limit — still returned as viewer."""
+        async_redis, sync_redis = _elo_client_with_data()
+        _seed_player(sync_redis, "top-1", "Top1", "keyboard", 1032.0, 2, 0)
+        _seed_player(sync_redis, "top-2", "Top2", "keyboard", 1016.0, 1, 0)
+        _seed_player(sync_redis, "viewer-1", "Viewer", "keyboard", 968.0, 0, 2)
+
+        with TestClient(app=app) as client:
+            import server
+            server.elo_manager = EloManager(async_redis)
+
+            resp = client.get("/api/leaderboard?category=keyboard&limit=2&user_id=viewer-1")
+            assert resp.status_code == 200
+            data = resp.json()
+            assert len(data["entries"]) == 2
+            assert data["viewer_in_entries"] is False
+            assert data["viewer"] is not None
+            assert data["viewer"]["rank"] == 3
+            assert data["viewer"]["name"] == "Viewer"
+
+    def test_viewer_all_category(self) -> None:
+        """Viewer rank works with category=all (merges voice + keyboard)."""
+        async_redis, sync_redis = _elo_client_with_data()
+        _seed_player(sync_redis, "viewer-1", "Viewer", "voice", 1016.0, 1, 0)
+        _seed_player(sync_redis, "other", "Other", "voice", 984.0, 0, 1)
+
+        with TestClient(app=app) as client:
+            import server
+            server.elo_manager = EloManager(async_redis)
+
+            resp = client.get("/api/leaderboard?category=all&user_id=viewer-1")
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["viewer"] is not None
+            assert data["viewer"]["input_mode"] == "voice"
+
+    def test_no_viewer_without_user_id(self) -> None:
+        """No viewer field when user_id not provided."""
+        with TestClient(app=app) as client:
+            import server
+            server.elo_manager = EloManager(
+                fakeredis.aioredis.FakeRedis(decode_responses=True)
+            )
+            resp = client.get("/api/leaderboard?category=keyboard")
+            assert resp.status_code == 200
+            data = resp.json()
+            assert "viewer" not in data
+            assert "viewer_in_entries" not in data
+
+
+class TestLeaderboardPageRoute:
+    """Test GET /leaderboard page route."""
+
+    def test_serves_html(self) -> None:
+        with TestClient(app=app) as client:
+            resp = client.get("/leaderboard")
+            assert resp.status_code == 200
+            assert "text/html" in resp.headers["content-type"]
+            assert "STICK FIGHTER" in resp.text
+
+
 class TestGetEloEndpoint:
     """Test GET /api/elo/{user_id}."""
 

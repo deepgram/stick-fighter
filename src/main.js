@@ -20,6 +20,7 @@ const screens = {
   joinRoom: document.getElementById('join-room'),
   roomLobby: document.getElementById('room-lobby'),
   roomController: document.getElementById('room-controller'),
+  leaderboard: document.getElementById('leaderboard'),
   matchResults: document.getElementById('match-results'),
   onboarding: document.getElementById('onboarding'),
 };
@@ -744,6 +745,108 @@ document.getElementById('btn-leave').addEventListener('click', () => {
 });
 
 // ─────────────────────────────────────────────
+// Leaderboard
+// ─────────────────────────────────────────────
+let lbCategory = 'all';
+
+/** Fetch and render the leaderboard */
+async function loadLeaderboard(category = 'all') {
+  lbCategory = category;
+
+  // Update filter button states
+  document.querySelectorAll('#lb-filters .lb-filter').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.category === category);
+  });
+
+  const body = document.getElementById('lb-body');
+  const emptyEl = document.getElementById('lb-empty');
+  const viewerRow = document.getElementById('lb-viewer-row');
+  body.innerHTML = '';
+  emptyEl.classList.add('hidden');
+  viewerRow.classList.add('hidden');
+
+  // Build URL with viewer's user ID if logged in
+  let url = `/api/leaderboard?category=${encodeURIComponent(category)}`;
+  const user = isLoggedIn() ? getUser() : null;
+  const viewerId = user ? (user.sub || user.id || '') : '';
+  if (viewerId) {
+    url += `&user_id=${encodeURIComponent(viewerId)}`;
+  }
+
+  try {
+    const resp = await fetch(url);
+    if (!resp.ok) return;
+    const data = await resp.json();
+
+    if (!data.entries || data.entries.length === 0) {
+      emptyEl.classList.remove('hidden');
+      return;
+    }
+
+    // Render entries
+    for (const entry of data.entries) {
+      const isViewer = viewerId && String(entry.user_id) === viewerId;
+      const tr = document.createElement('tr');
+      if (isViewer) tr.classList.add('lb-viewer');
+      const wl = `${entry.wins}W-${entry.losses}L` + (entry.draws ? `-${entry.draws}D` : '');
+      const modeBadge = entry.input_mode || '';
+      const badgeClass = modeBadge === 'voice' ? 'voice' : modeBadge === 'keyboard' ? 'keyboard' : '';
+      tr.innerHTML = `
+        <td class="lb-rank">${entry.rank}</td>
+        <td class="lb-name">${escapeHtml(entry.name || 'Anonymous')}</td>
+        <td class="lb-rating">${Math.round(entry.rating)}</td>
+        <td class="lb-record">${wl}</td>
+        <td><span class="lb-badge ${badgeClass}">${modeBadge || '—'}</span></td>
+      `;
+      body.appendChild(tr);
+    }
+
+    // Show viewer's own row if they're ranked but not in the top entries
+    if (data.viewer && !data.viewer_in_entries) {
+      const v = data.viewer;
+      const vwl = `${v.wins}W-${v.losses}L` + (v.draws ? `-${v.draws}D` : '');
+      const vBadge = v.input_mode || '';
+      const vBadgeClass = vBadge === 'voice' ? 'voice' : vBadge === 'keyboard' ? 'keyboard' : '';
+      viewerRow.innerHTML = `
+        <span class="lb-rank">#${v.rank}</span>
+        <span class="lb-name">${escapeHtml(v.name || 'You')}</span>
+        <span class="lb-rating">${Math.round(v.rating)}</span>
+        <span class="lb-record">${vwl}</span>
+        <span class="lb-badge ${vBadgeClass}">${vBadge || '—'}</span>
+      `;
+      viewerRow.classList.remove('hidden');
+    }
+  } catch (err) {
+    console.warn('[leaderboard] Failed to load:', err);
+    emptyEl.textContent = 'Failed to load leaderboard.';
+    emptyEl.classList.remove('hidden');
+  }
+}
+
+/** Escape HTML to prevent XSS in player names */
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+// Leaderboard button on landing page
+document.getElementById('btn-leaderboard').addEventListener('click', () => {
+  showScreen('leaderboard');
+  loadLeaderboard(lbCategory);
+});
+
+// Filter buttons
+document.getElementById('lb-filters').addEventListener('click', e => {
+  const btn = e.target.closest('.lb-filter');
+  if (!btn) return;
+  loadLeaderboard(btn.dataset.category);
+});
+
+// Back button
+document.getElementById('btn-lb-back').addEventListener('click', () => showScreen('landing'));
+
+// ─────────────────────────────────────────────
 // Click handlers for mode pills (onboarding)
 // ─────────────────────────────────────────────
 document.querySelectorAll('.mode-pills').forEach(container => {
@@ -826,6 +929,7 @@ window.addEventListener('keydown', e => {
     else if (state === 'joinRoom') showScreen('multiplayer');
     else if (state === 'roomLobby') { stopRoomPolling(); showScreen('multiplayer'); }
     else if (state === 'roomController') { stopRoomPolling(); showScreen('multiplayer'); }
+    else if (state === 'leaderboard') showScreen('landing');
     else if (state === 'matchResults') showLanding();
     else if (state === 'onboarding') showScreen('landing');
   }
@@ -912,6 +1016,9 @@ initAuth().then(handledRoute => {
     roomCodeInput.value = route.code;
     joinGoBtn.disabled = false;
     joinRoom(route.code);
+  } else if (route.type === 'leaderboard') {
+    showScreen('leaderboard');
+    loadLeaderboard(lbCategory);
   } else if (route.type !== 'auth-callback') {
     showScreen('landing');
   }

@@ -28,6 +28,8 @@ after each iteration and it's included in prompts for context.
 - **Controller → ELO category mapping**: UI mode IDs ("controller", "voice", "phone") differ from ELO categories ("keyboard", "voice"). `elo.controller_to_category()` bridges the gap. "controller" and "keyboard" both map to "keyboard" category.
 - **Room cleanup pattern**: `room_cleanup.py` has `RoomCleanupTask` that periodically sweeps (every 30s) in-memory rooms against Redis. Expired rooms get `room_expired` sent to WebSocket clients, then game loop + signaling cleaned up. Also sweeps matchmaking queue entries whose TTL keys expired. Started/stopped via server lifespan.
 - **Matchmaking queue TTL pattern**: Two-key pattern in `room_manager.py` — sorted set `matchmaking:{category}` for ELO-scored queue, plus per-player TTL key `matchmaking_ttl:{category}:{player_id}` that auto-expires. Cleanup sweep removes orphaned sorted set entries whose TTL key is gone.
+- **Leaderboard viewer pattern**: `/api/leaderboard?user_id=X` returns `viewer` (user's own rank/stats) and `viewer_in_entries` (bool). For "all" category, picks user's best-rated category. Frontend highlights viewer's row in table and shows a separate viewer row when they're below the limit.
+- **Sync Redis seed helpers for ELO tests**: `_elo_client_with_data()` returns `(async_redis, sync_redis)` sharing a `FakeServer`. `_seed_player()` writes directly to Redis hashes + sorted sets. Avoids `asyncio.new_event_loop()` issues.
 
 ---
 
@@ -362,4 +364,28 @@ after each iteration and it's included in prompts for context.
   - Two-key pattern (sorted set + TTL key) cleanly separates fast range queries from auto-expiry without custom expiry logic
   - Cleanup must notify WebSocket clients _before_ stopping the game loop — once stop_loop runs, player connections are marked disconnected and send_data fails
   - `TYPE_CHECKING` guard for imports avoids circular dependency between room_cleanup.py and the modules it cleans up
+---
+
+## 2026-03-13 - stick-fighter-d4c.17
+- Implemented global leaderboard page (US-016)
+- Enhanced GET `/api/leaderboard` with optional `user_id` query param — returns viewer's own rank/stats even when not in top entries
+- Leaderboard screen in index.html with filter tabs (All / Voice / Keyboard), table with rank/name/ELO/W-L/mode badge
+- Logged-in player's row highlighted with green background in table; separate viewer row shown when below the limit
+- Landing page "VIEW LEADERBOARD" link + `/leaderboard` URL route (server + router.js + main.js)
+- XSS protection via `escapeHtml()` for player names
+- Filter switching re-fetches data and updates active tab styling
+- Escape key returns to landing from leaderboard screen
+- 7 new Python tests: viewer not ranked, viewer in entries, viewer below limit, viewer all-category, no viewer without user_id, leaderboard page route
+- 1 new JS test: router recognizes `/leaderboard` path
+- Files changed:
+  - `server.py` — Enhanced `/api/leaderboard` with viewer rank, added GET `/leaderboard` page route, registered in app
+  - `index.html` — Added leaderboard screen HTML + CSS (filters, table, viewer row, badge styles), leaderboard link on landing
+  - `src/main.js` — Added leaderboard screen, `loadLeaderboard()` fetch+render, filter handlers, `escapeHtml()`, Escape key, URL route handling
+  - `src/router.js` — Added `/leaderboard` route detection
+  - `tests/test_elo.py` — Added `_elo_client_with_data()` + `_seed_player()` helpers, TestLeaderboardViewer (5 tests), TestLeaderboardPageRoute (1 test)
+  - `tests/router.test.js` — Added leaderboard route test
+- **Learnings:**
+  - Sync FakeRedis + `_seed_player()` helper is cleaner than `asyncio.new_event_loop().run_until_complete()` for pre-populating ELO data in sync tests — avoids event loop mismatches
+  - Viewer rank feature requires different logic per category: for "all" merge mode, pick best category; for specific category, use `get_player_rank()` directly
+  - `escapeHtml()` via `document.createElement('div').textContent=str` is the simplest XSS prevention for user-supplied display names in the DOM
 ---

@@ -14,5 +14,8 @@ export function parseRoute(pathname) {
   if (pathname === '/auth/callback') {
     return { type: 'auth-callback' };
   }
+  if (pathname === '/leaderboard') {
+    return { type: 'leaderboard' };
+  }
   return { type: 'home' };
 }

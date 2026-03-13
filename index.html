@@ -632,6 +632,127 @@
       border-color: var(--dg-slate);
       color: var(--dg-text);
     }
+
+    /* ── Leaderboard screen ── */
+    .leaderboard-screen {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 20px;
+      padding: 20px;
+      overflow-y: auto;
+    }
+    .leaderboard-screen.hidden { display: none; }
+
+    .lb-filters {
+      display: flex;
+      gap: 6px;
+    }
+    .lb-filter {
+      font-family: monospace;
+      font-size: 12px;
+      padding: 6px 16px;
+      border-radius: 4px;
+      border: 2px solid var(--dg-border);
+      background: var(--dg-almost-blk);
+      color: var(--dg-pebble);
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .lb-filter:hover {
+      border-color: var(--dg-slate);
+      color: var(--dg-text);
+    }
+    .lb-filter.active {
+      border-color: var(--dg-primary);
+      background: rgba(19, 239, 149, 0.1);
+      color: var(--dg-text);
+    }
+
+    .lb-table {
+      width: 100%;
+      max-width: 640px;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    .lb-table th {
+      text-align: left;
+      padding: 8px 12px;
+      color: var(--dg-pebble);
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      border-bottom: 1px solid var(--dg-border);
+    }
+    .lb-table td {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--dg-border);
+    }
+    .lb-table tr:hover td {
+      background: rgba(255, 255, 255, 0.02);
+    }
+    .lb-table tr.lb-viewer td {
+      background: rgba(19, 239, 149, 0.08);
+      color: var(--dg-primary);
+      font-weight: bold;
+    }
+    .lb-rank { width: 50px; text-align: center; }
+    .lb-name { min-width: 120px; }
+    .lb-rating {
+      font-weight: bold;
+      background: linear-gradient(to right, var(--dg-grad-start), var(--dg-grad-end));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    .lb-record { color: var(--dg-slate); font-size: 11px; }
+    .lb-badge {
+      font-size: 10px;
+      padding: 2px 8px;
+      border-radius: 3px;
+      border: 1px solid var(--dg-border);
+      color: var(--dg-slate);
+    }
+    .lb-badge.voice { border-color: var(--dg-secondary); color: var(--dg-secondary); }
+    .lb-badge.keyboard { border-color: var(--dg-primary); color: var(--dg-primary); }
+
+    .lb-empty {
+      color: var(--dg-pebble);
+      font-size: 14px;
+      padding: 40px;
+    }
+
+    .lb-viewer-row {
+      width: 100%;
+      max-width: 640px;
+      background: var(--dg-charcoal);
+      border: 1px solid var(--dg-primary);
+      border-radius: 6px;
+      padding: 12px 16px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      font-size: 13px;
+    }
+    .lb-viewer-row.hidden { display: none; }
+    .lb-viewer-row .lb-rank { color: var(--dg-primary); font-weight: bold; font-size: 16px; }
+    .lb-viewer-row .lb-name { color: var(--dg-primary); font-weight: bold; }
+    .lb-viewer-row .lb-rating { font-size: 14px; }
+    .lb-viewer-row .lb-record { color: var(--dg-slate); }
+
+    .lb-link {
+      font-family: monospace;
+      font-size: 11px;
+      color: var(--dg-pebble);
+      cursor: pointer;
+      transition: color 0.15s;
+      border: none;
+      background: none;
+      text-decoration: underline;
+      text-underline-offset: 2px;
+    }
+    .lb-link:hover { color: var(--dg-primary); }
   </style>
 </head>
 <body>
@@ -659,6 +780,7 @@
         <span class="path-sub">Keyboard, Voice, Phone, or AI</span>
       </button>
     </div>
+    <button class="lb-link" id="btn-leaderboard">VIEW LEADERBOARD</button>
   </div>
 
   <!-- Multiplayer menu -->
@@ -774,6 +896,35 @@
 
     <div class="start-prompt">Press <kbd class="lg">ENTER</kbd> to fight</div>
     <div class="tips">Double-tap jump for somersault &middot; Hold back to block &middot; Attacks clash when hitboxes meet</div>
+  </div>
+
+  <!-- Leaderboard screen -->
+  <div class="leaderboard-screen hidden" id="leaderboard">
+    <h2>LEADERBOARD</h2>
+    <div class="lb-filters" id="lb-filters">
+      <button class="lb-filter active" data-category="all">All</button>
+      <button class="lb-filter" data-category="voice">Voice</button>
+      <button class="lb-filter" data-category="keyboard">Keyboard</button>
+    </div>
+    <div class="lb-viewer-row hidden" id="lb-viewer-row">
+      <!-- Populated by JS: viewer's own rank when not in top entries -->
+    </div>
+    <table class="lb-table">
+      <thead>
+        <tr>
+          <th class="lb-rank">#</th>
+          <th class="lb-name">Player</th>
+          <th>ELO</th>
+          <th>Record</th>
+          <th>Mode</th>
+        </tr>
+      </thead>
+      <tbody id="lb-body">
+        <!-- Populated by JS -->
+      </tbody>
+    </table>
+    <p class="lb-empty hidden" id="lb-empty">No ranked players yet. Play some matches!</p>
+    <button class="back-btn" id="btn-lb-back">← BACK</button>
   </div>
 
   <!-- Match results screen -->

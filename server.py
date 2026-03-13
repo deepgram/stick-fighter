@@ -557,6 +557,13 @@ async def room_route(code: str) -> Response:
     return Response(content=html, media_type="text/html")
 
 
+@get("/leaderboard")
+async def leaderboard_page() -> Response:
+    """Serve the game page for the leaderboard URL (JS reads the route)."""
+    html = (ROOT / "index.html").read_text()
+    return Response(content=html, media_type="text/html")
+
+
 @post("/api/room/create")
 async def room_create(request: Request) -> dict[str, str]:
     """Create a new multiplayer room. Returns the room code and shareable URL."""
@@ -1395,16 +1402,20 @@ async def leaderboard(request: Request) -> dict[str, Any]:
     Query params:
         category: 'voice', 'keyboard', or 'all' (default: 'all')
         limit: max entries (default: 50)
+        user_id: optional — if provided, include viewer's own entry + rank
     """
     if elo_manager is None:
         raise HTTPException(status_code=503, detail="ELO manager not available")
 
     category = request.query_params.get("category", "all")
     limit_str = request.query_params.get("limit", "50")
+    viewer_id = request.query_params.get("user_id", "")
     try:
         limit = min(int(limit_str), 100)
     except ValueError:
         limit = 50
+
+    entries: list[dict[str, Any]]
 
     if category == "all":
         # Merge voice + keyboard leaderboards, de-duplicate by user_id (take highest)
@@ -1423,17 +1434,52 @@ async def leaderboard(request: Request) -> dict[str, Any]:
         for i, entry in enumerate(merged):
             entry["rank"] = i + 1
 
-        return {"category": "all", "entries": merged}
-
-    if category not in ("voice", "keyboard"):
+        entries = merged
+    elif category not in ("voice", "keyboard"):
         raise HTTPException(status_code=400, detail="category must be 'voice', 'keyboard', or 'all'")
+    else:
+        entries = await elo_manager.get_leaderboard(category, limit=limit)
+        # Add input_mode badge
+        for entry in entries:
+            entry["input_mode"] = category
 
-    entries = await elo_manager.get_leaderboard(category, limit=limit)
-    # Add input_mode badge
-    for entry in entries:
-        entry["input_mode"] = category
+    result: dict[str, Any] = {"category": category, "entries": entries}
 
-    return {"category": category, "entries": entries}
+    # If viewer_id provided, include their rank/stats even if not in top entries
+    if viewer_id:
+        viewer_in_entries = any(str(e["user_id"]) == viewer_id for e in entries)
+        if category == "all":
+            # For "all", check both categories and return the best
+            voice_stats = await elo_manager.get_rating(viewer_id, "voice")
+            kb_stats = await elo_manager.get_rating(viewer_id, "keyboard")
+            voice_rank = await elo_manager.get_player_rank(viewer_id, "voice")
+            kb_rank = await elo_manager.get_player_rank(viewer_id, "keyboard")
+            # Pick the category with higher rating (or the one that's ranked)
+            best: dict[str, Any] | None = None
+            if voice_rank is not None and kb_rank is not None:
+                if float(voice_stats["rating"]) >= float(kb_stats["rating"]):
+                    best = {**voice_stats, "rank": voice_rank, "input_mode": "voice"}
+                else:
+                    best = {**kb_stats, "rank": kb_rank, "input_mode": "keyboard"}
+            elif voice_rank is not None:
+                best = {**voice_stats, "rank": voice_rank, "input_mode": "voice"}
+            elif kb_rank is not None:
+                best = {**kb_stats, "rank": kb_rank, "input_mode": "keyboard"}
+            name = await elo_manager.get_player_name(viewer_id)
+            if best:
+                best["name"] = name
+            result["viewer"] = best
+        else:
+            stats = await elo_manager.get_rating(viewer_id, category)
+            rank = await elo_manager.get_player_rank(viewer_id, category)
+            name = await elo_manager.get_player_name(viewer_id)
+            if rank is not None:
+                result["viewer"] = {**stats, "rank": rank, "input_mode": category, "name": name}
+            else:
+                result["viewer"] = None
+        result["viewer_in_entries"] = viewer_in_entries
+
+    return result
 
 
 @get("/api/elo/{user_id:str}")
@@ -1472,6 +1518,7 @@ app = Litestar(
         health,
         index_route,
         room_route,
+        leaderboard_page,
         auth_callback_route,
         auth_config,
         auth_token,
