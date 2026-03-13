@@ -15,6 +15,7 @@ const screens = {
   landing: document.getElementById('landing'),
   multiplayer: document.getElementById('multiplayer-menu'),
   joinRoom: document.getElementById('join-room'),
+  roomLobby: document.getElementById('room-lobby'),
   onboarding: document.getElementById('onboarding'),
 };
 
@@ -164,9 +165,22 @@ document.getElementById('btn-multiplayer').addEventListener('click', () => showS
 document.getElementById('btn-singleplayer').addEventListener('click', () => showScreen('onboarding'));
 
 // Multiplayer menu
-document.getElementById('btn-create-room').addEventListener('click', () => {
-  // Placeholder — wired up in US-002
-  console.log('[multiplayer] Create room — not yet implemented');
+document.getElementById('btn-create-room').addEventListener('click', async () => {
+  try {
+    const resp = await fetch('/api/room/create', { method: 'POST' });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data = await resp.json();
+    // Store room info for later use
+    localStorage.setItem('sf_roomCode', data.code);
+    localStorage.setItem('sf_playerId', data.playerId);
+    localStorage.setItem('sf_playerNum', '1');
+    // Show lobby with room code + URL
+    document.getElementById('room-code-display').textContent = data.code;
+    document.getElementById('room-url-display').value = data.url;
+    showScreen('roomLobby');
+  } catch (err) {
+    console.error('[multiplayer] Failed to create room:', err);
+  }
 });
 document.getElementById('btn-join-room').addEventListener('click', () => showScreen('joinRoom'));
 document.getElementById('btn-matchmaking').addEventListener('click', () => {
@@ -196,6 +210,17 @@ document.getElementById('btn-join-back').addEventListener('click', () => {
   roomCodeInput.value = '';
   joinGoBtn.disabled = true;
   showScreen('multiplayer');
+});
+
+// Room lobby
+document.getElementById('btn-lobby-back').addEventListener('click', () => showScreen('multiplayer'));
+document.getElementById('btn-copy-url').addEventListener('click', () => {
+  const url = document.getElementById('room-url-display').value;
+  navigator.clipboard.writeText(url).then(() => {
+    const btn = document.getElementById('btn-copy-url');
+    btn.textContent = 'COPIED';
+    setTimeout(() => { btn.textContent = 'COPY'; }, 1500);
+  });
 });
 
 // ─────────────────────────────────────────────
@@ -278,6 +303,7 @@ window.addEventListener('keydown', e => {
   if (e.code === 'Escape') {
     if (state === 'multiplayer') showScreen('landing');
     else if (state === 'joinRoom') showScreen('multiplayer');
+    else if (state === 'roomLobby') showScreen('multiplayer');
     else if (state === 'onboarding') showScreen('landing');
   }
 });

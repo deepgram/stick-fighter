@@ -16,6 +16,7 @@ after each iteration and it's included in prompts for context.
 - **fakeredis for testing**: Use `fakeredis.aioredis.FakeRedis(decode_responses=True)` as a drop-in for `redis.asyncio.Redis` in tests. No real Redis needed.
 - **Room manager pattern**: `room_manager.py` encapsulates all Redis room ops. Import `RoomManager` + `generate_room_code`. Server creates instance via lifespan context manager.
 - **Game loop pattern**: `game_loop.py` manages per-room asyncio tasks. `GameLoopManager` creates/starts/stops room loops. Each `RoomLoop` has a `GameEngine`, player connections with input queues, and broadcasts state at 20Hz. Mock WebSockets with `MagicMock` + `AsyncMock(send_data=...)` for testing.
+- **TestClient + global state**: Litestar's `TestClient` runs the app lifespan on `__enter__()`, which sets globals like `room_manager`. To test endpoints with fakeredis, inject the mock *after* `with TestClient(app=app) as client:` — not before — or the lifespan will overwrite it.
 
 ---
 
@@ -104,4 +105,22 @@ after each iteration and it's included in prompts for context.
   - Mock WebSockets for testing: `MagicMock()` with `send_data = AsyncMock()` — no need for real server
   - `time.monotonic()` for tick timing is more reliable than `time.time()` (immune to system clock changes)
   - Input merging strategy matters: held actions (directional) use latest frame, edge-triggered (attacks) must accumulate to prevent dropped inputs
+---
+
+## 2026-03-13 - stick-fighter-d4c.5
+- Implemented POST `/api/room/create` endpoint for multiplayer room creation
+- Added room-lobby screen to index.html (displays room code + shareable URL + copy button)
+- Wired "Create Room" button in main.js to call API and navigate to lobby screen
+- Room data stored in localStorage (roomCode, playerId, playerNum) for later WebSocket use
+- 6 new Python tests for the endpoint (code format, player ID, URL, uniqueness, 503 guard)
+- Files changed:
+  - `server.py` — Added `room_create` POST endpoint at `/api/room/create`, registered in app routes
+  - `index.html` — Added room-lobby screen div with code display, URL input, copy button, waiting text; added CSS
+  - `src/main.js` — Added roomLobby to screens dict, wired Create Room fetch + lobby back/copy handlers, Escape for lobby
+  - `tests/test_server.py` — Added `room_client` fixture (fakeredis injected after lifespan), 6 TestRoomCreate tests, removed unused imports
+- **Learnings:**
+  - Litestar `TestClient` runs the app lifespan, which overrides global state (like `room_manager`). Inject test state *after* `TestClient.__enter__()`, not before.
+  - Litestar POST handlers default to HTTP 201, not 200
+  - fakeredis instances are bound to the event loop they were created in — can't use `asyncio.get_event_loop().run_until_complete()` from sync test code to access them
+  - `request.base_url` in Litestar returns the request origin (e.g., `http://testserver.local`), useful for building shareable URLs dynamically
 ---

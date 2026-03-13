@@ -3,10 +3,10 @@
   "sessionId": "c3614eb9-d39b-4e7a-b069-fb1bdd08a70c",
   "status": "running",
   "startedAt": "2026-03-13T14:38:07.817Z",
-  "updatedAt": "2026-03-13T15:20:11.488Z",
-  "currentIteration": 3,
+  "updatedAt": "2026-03-13T15:26:27.068Z",
+  "currentIteration": 4,
   "maxIterations": 0,
-  "tasksCompleted": 3,
+  "tasksCompleted": 4,
   "isPaused": false,
   "agentPlugin": "claude",
   "trackerState": {
@@ -47,8 +47,8 @@
       {
         "id": "stick-fighter-d4c.6",
         "title": "US-006: Server game loop with input processing and state broadcast",
-        "status": "open",
-        "completedInSession": false
+        "status": "completed",
+        "completedInSession": true
       },
       {
         "id": "stick-fighter-d4c.5",
@@ -154,6 +154,16 @@
       "durationMs": 268156,
       "startedAt": "2026-03-13T15:09:07.269Z",
       "endedAt": "2026-03-13T15:13:35.425Z"
+    },
+    {
+      "iteration": 4,
+      "status": "completed",
+      "taskId": "stick-fighter-d4c.6",
+      "taskTitle": "US-006: Server game loop with input processing and state broadcast",
+      "taskCompleted": true,
+      "durationMs": 394263,
+      "startedAt": "2026-03-13T15:13:37.102Z",
+      "endedAt": "2026-03-13T15:20:11.365Z"
     }
   ],
   "skippedTaskIds": [],

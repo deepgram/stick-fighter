@@ -414,6 +414,71 @@
       opacity: 0.3;
       cursor: not-allowed;
     }
+
+    /* ── Room lobby screen ── */
+    .room-lobby {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 20px;
+      padding: 20px;
+    }
+    .room-lobby.hidden { display: none; }
+
+    .room-code-display {
+      font-size: 32px;
+      font-weight: bold;
+      letter-spacing: 3px;
+      color: var(--dg-primary);
+      background: var(--dg-charcoal);
+      border: 2px solid var(--dg-primary);
+      border-radius: 8px;
+      padding: 16px 32px;
+    }
+
+    .room-url-row {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .room-url-input {
+      font-family: monospace;
+      font-size: 12px;
+      padding: 8px 12px;
+      background: var(--dg-almost-blk);
+      border: 1px solid var(--dg-border);
+      border-radius: 6px;
+      color: var(--dg-slate);
+      width: 340px;
+      text-align: center;
+    }
+    .room-url-input:focus { outline: none; }
+
+    .copy-btn {
+      font-family: monospace;
+      font-size: 11px;
+      font-weight: bold;
+      padding: 8px 14px;
+      border-radius: 6px;
+      border: 1px solid var(--dg-border);
+      background: var(--dg-charcoal);
+      color: var(--dg-slate);
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .copy-btn:hover {
+      border-color: var(--dg-primary);
+      color: var(--dg-primary);
+    }
+
+    .room-waiting {
+      font-size: 14px;
+      color: var(--dg-pebble);
+      animation: pulse 2s ease-in-out infinite;
+    }
   </style>
 </head>
 <body>
@@ -477,6 +542,19 @@
       placeholder="red-tiger-paw" autocomplete="off" spellcheck="false">
     <button class="join-btn" id="btn-join-go" disabled>JOIN</button>
     <button class="back-btn" id="btn-join-back">← BACK</button>
+  </div>
+
+  <!-- Room lobby (after creating a room) -->
+  <div class="room-lobby hidden" id="room-lobby">
+    <h2>ROOM CREATED</h2>
+    <p class="join-hint">Share this code with your opponent</p>
+    <div class="room-code-display" id="room-code-display">---</div>
+    <div class="room-url-row">
+      <input type="text" class="room-url-input" id="room-url-display" readonly>
+      <button class="copy-btn" id="btn-copy-url" title="Copy URL">COPY</button>
+    </div>
+    <p class="room-waiting" id="room-waiting-text">Waiting for opponent...</p>
+    <button class="back-btn" id="btn-lobby-back">← LEAVE ROOM</button>
   </div>
 
   <!-- Onboarding screen (single-player fighter selection) -->

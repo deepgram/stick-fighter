@@ -534,6 +534,26 @@ async def room_route(code: str) -> Response:
     return Response(content=html, media_type="text/html")
 
 
+@post("/api/room/create")
+async def room_create(request: Request) -> dict[str, str]:
+    """Create a new multiplayer room. Returns the room code and shareable URL."""
+    if room_manager is None:
+        raise HTTPException(status_code=503, detail="Room manager not available")
+
+    player_id = str(uuid.uuid4())
+    room = await room_manager.create_room(player_id)
+
+    # Build shareable URL from request origin
+    base = str(request.base_url).rstrip("/")
+    code = room["code"]
+
+    return {
+        "code": code,
+        "playerId": player_id,
+        "url": f"{base}/room/{code}",
+    }
+
+
 @get("/api/session/connect")
 async def session_connect(mode: str | None = None, player: int = 1) -> ServerSentEvent:
     if mode != "llm":
@@ -880,6 +900,7 @@ app = Litestar(
         health,
         index_route,
         room_route,
+        room_create,
         stt_proxy,
         llm_command,
         voice_llm,
