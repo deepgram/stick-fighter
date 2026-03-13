@@ -11,5 +11,8 @@ export function parseRoute(pathname) {
   if (roomMatch) {
     return { type: 'room', code: roomMatch[1] };
   }
+  if (pathname === '/auth/callback') {
+    return { type: 'auth-callback' };
+  }
   return { type: 'home' };
 }

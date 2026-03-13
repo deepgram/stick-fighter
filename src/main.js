@@ -7,6 +7,7 @@ import { PhoneAdapter } from './phone.js';
 import { SimulatedAdapter } from './simulated.js';
 import { LLMAdapter } from './llm.js';
 import { parseRoute } from './router.js';
+import { isAuthConfigured, login, logout, handleCallback, checkAuth, isLoggedIn, getUser } from './auth.js';
 
 const canvas = document.getElementById('game');
 
@@ -359,15 +360,87 @@ window.addEventListener('keydown', e => {
 });
 
 // ─────────────────────────────────────────────
-// URL routing — detect /room/:code on load
+// Auth UI — header login/user section
+// ─────────────────────────────────────────────
+const headerAuth = document.getElementById('header-auth');
+
+/** Update the header auth section based on login state */
+function updateAuthUI() {
+  if (!headerAuth) return;
+
+  if (isLoggedIn()) {
+    const user = getUser();
+    const name = user?.name || 'User';
+    headerAuth.innerHTML = `
+      <span class="auth-user-name">${name}</span>
+      <button class="auth-logout-btn" id="btn-auth-logout">LOG OUT</button>
+    `;
+    headerAuth.classList.remove('hidden');
+    document.getElementById('btn-auth-logout')?.addEventListener('click', () => {
+      logout();
+      updateAuthUI();
+    });
+  } else {
+    // Show login button only if OIDC is configured (check cached config)
+    headerAuth.innerHTML = `
+      <button class="auth-login-btn" id="btn-auth-login">LOG IN</button>
+    `;
+    // Will be shown/hidden after config check
+    headerAuth.classList.add('hidden');
+  }
+}
+
+/** Initialize auth — check config, handle callback, restore session */
+async function initAuth() {
+  const configured = await isAuthConfigured();
+
+  if (!configured) {
+    // OIDC not configured — hide auth UI entirely
+    headerAuth?.classList.add('hidden');
+    return;
+  }
+
+  // Check if this is an auth callback
+  const route = parseRoute();
+  if (route.type === 'auth-callback') {
+    const user = await handleCallback();
+    if (user) {
+      console.log('[auth] Logged in as:', user.name);
+    }
+    updateAuthUI();
+    showScreen('landing');
+    return true; // Signal that we handled the route
+  }
+
+  // Try to restore existing session (refresh token if needed)
+  await checkAuth();
+  updateAuthUI();
+
+  // Show login button for anonymous users
+  if (!isLoggedIn()) {
+    headerAuth?.classList.remove('hidden');
+    document.getElementById('btn-auth-login')?.addEventListener('click', login);
+  }
+
+  return false;
+}
+
+// ─────────────────────────────────────────────
+// URL routing — detect /room/:code or /auth/callback on load
 // ─────────────────────────────────────────────
 const route = parseRoute();
-if (route.type === 'room') {
-  // Auto-join room from URL — show join screen with code pre-filled, then attempt join
-  showScreen('joinRoom');
-  roomCodeInput.value = route.code;
-  joinGoBtn.disabled = false;
-  joinRoom(route.code);
-} else {
-  showScreen('landing');
-}
+
+// Initialize auth (may handle callback route)
+initAuth().then(handledRoute => {
+  if (handledRoute) return; // Auth callback was handled
+
+  if (route.type === 'room') {
+    // Auto-join room from URL — show join screen with code pre-filled, then attempt join
+    showScreen('joinRoom');
+    roomCodeInput.value = route.code;
+    joinGoBtn.disabled = false;
+    joinRoom(route.code);
+  } else if (route.type !== 'auth-callback') {
+    showScreen('landing');
+  }
+});

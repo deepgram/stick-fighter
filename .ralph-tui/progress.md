@@ -171,3 +171,31 @@ after each iteration and it's included in prompts for context.
   - Room manager's `join_room` ValueError messages are specific enough to map to distinct HTTP status codes (404 vs 409 vs 400)
   - URL auto-join shows the join screen first (with code pre-filled) so errors are visible if the room is invalid
 ---
+
+## 2026-03-13 - stick-fighter-d4c.4
+- Implemented optional OAuth2/OIDC login via id.dx.deepgram.com
+- Auth module (`auth.py`) with OIDCConfig, token exchange, refresh, userinfo, JWT payload decoding
+- Server endpoints: GET `/api/auth/config`, POST `/api/auth/token`, POST `/api/auth/refresh`, GET `/api/auth/me`, GET `/auth/callback`
+- Frontend auth module (`src/auth.js`): login flow, handleCallback, token storage in localStorage, session restore, auto-refresh
+- Header shows login button (when OIDC configured) or user display name + logout
+- Router updated to detect `/auth/callback` route
+- CSRF protection via `state` parameter (generated with crypto.randomUUID, stored in sessionStorage)
+- Anonymous players can play without logging in — auth is fully optional
+- 28 Python tests + 5 JS tests, all passing
+- Files changed:
+  - `auth.py` — New: OIDCConfig dataclass, JWT decode, exchange_code, refresh_tokens, fetch_userinfo, extract_user_from_id_token
+  - `server.py` — Added auth imports, oidc_config global, lifespan init, 5 new endpoints (auth_callback_route, auth_config, auth_token, auth_refresh, auth_me), registered in app routes
+  - `src/auth.js` — New: getAuthConfig, login, handleCallback, refreshToken, logout, isLoggedIn, getUser, checkAuth
+  - `src/router.js` — Added auth-callback route detection
+  - `src/main.js` — Added auth imports, updateAuthUI, initAuth, wired into route handling
+  - `index.html` — Added header-auth section, auth CSS (login/logout buttons, user name display)
+  - `tests/test_auth.py` — New: 28 tests across 8 test classes
+  - `tests/auth.test.js` — New: 5 tests for auth-callback routing
+- **Learnings:**
+  - Litestar POST endpoints default to 201 status — token exchange and refresh endpoints follow this naturally
+  - `unittest.mock.patch("server.exchange_code")` works for mocking imported functions in the server module scope
+  - JWT payload decoding (base64url) needs padding normalization — urlsafe_b64decode is strict about `=` padding
+  - Auth init is async but route handling must be immediate — use a promise chain that returns whether the auth callback was handled
+  - OIDC endpoints (authorize, token, userinfo) can be derived from issuer URL as convention but should be overridable via env vars
+  - `sessionStorage` for CSRF state parameter is better than `localStorage` — it's scoped to the tab and auto-clears on close
+---

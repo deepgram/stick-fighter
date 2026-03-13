@@ -31,6 +31,7 @@ from litestar.exceptions import HTTPException
 from room_manager import RoomManager
 from game_loop import GameLoopManager
 from signaling import SignalingManager, ICE_SERVERS
+from auth import OIDCConfig, exchange_code, refresh_tokens, fetch_userinfo, extract_user_from_id_token
 
 # ─────────────────────────────────────────────
 # Config
@@ -45,17 +46,23 @@ ROOT = Path(__file__).parent
 room_manager: RoomManager | None = None
 game_loop_manager: GameLoopManager | None = None
 signaling_manager: SignalingManager | None = None
+oidc_config: OIDCConfig | None = None
 
 
 @asynccontextmanager
 async def lifespan(app: Litestar) -> AsyncGenerator[None, None]:
     """Start/stop the Redis connection pool and game loop manager."""
-    global room_manager, game_loop_manager, signaling_manager  # noqa: PLW0603
+    global room_manager, game_loop_manager, signaling_manager, oidc_config  # noqa: PLW0603
     redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379")
     pool = aioredis.from_url(redis_url, decode_responses=True)
     room_manager = RoomManager(pool)
     game_loop_manager = GameLoopManager()
     signaling_manager = SignalingManager()
+    oidc_config = OIDCConfig.from_env()
+    if oidc_config.configured:
+        print(f"[auth] OIDC configured: issuer={oidc_config.issuer}")
+    else:
+        print("[auth] OIDC not configured (set OIDC_CLIENT_ID to enable login)")
     print(f"[redis] Connected to {redis_url}")
     try:
         yield
@@ -64,6 +71,7 @@ async def lifespan(app: Litestar) -> AsyncGenerator[None, None]:
             await game_loop_manager.stop_all()
         game_loop_manager = None
         signaling_manager = None
+        oidc_config = None
         await pool.aclose()
         room_manager = None
         print("[redis] Connection closed")
@@ -1037,6 +1045,140 @@ async def game_ws(socket: WebSocket, code: str) -> None:
 
 
 # ─────────────────────────────────────────────
+# Auth (OIDC / OAuth2)
+# ─────────────────────────────────────────────
+
+
+@get("/auth/callback")
+async def auth_callback_route() -> Response:
+    """Serve the game page for the OAuth callback (JS reads the query params)."""
+    html = (ROOT / "index.html").read_text()
+    return Response(content=html, media_type="text/html")
+
+
+@get("/api/auth/config")
+async def auth_config(request: Request) -> dict[str, Any]:
+    """Return OIDC configuration for the frontend to build the login URL.
+
+    Returns empty config if OIDC is not configured (login button hidden).
+    """
+    if oidc_config is None or not oidc_config.configured:
+        return {"configured": False}
+
+    base = str(request.base_url).rstrip("/")
+    redirect_uri = os.environ.get("OIDC_REDIRECT_URI", f"{base}/auth/callback")
+
+    return {
+        "configured": True,
+        "clientId": oidc_config.client_id,
+        "authorizationEndpoint": oidc_config.authorization_endpoint,
+        "redirectUri": redirect_uri,
+        "scopes": oidc_config.scopes,
+    }
+
+
+@post("/api/auth/token")
+async def auth_token(request: Request, data: dict[str, str]) -> dict[str, Any]:
+    """Exchange an authorization code for tokens.
+
+    Request body:
+        code: str — the authorization code from the OIDC provider
+        redirect_uri: str — the redirect URI used in the authorization request
+    """
+    if oidc_config is None or not oidc_config.configured:
+        raise HTTPException(status_code=503, detail="OIDC not configured")
+
+    code = data.get("code", "")
+    if not code:
+        raise HTTPException(status_code=400, detail="Authorization code is required")
+
+    # Use provided redirect_uri or derive from request
+    base = str(request.base_url).rstrip("/")
+    redirect_uri = data.get("redirect_uri", os.environ.get("OIDC_REDIRECT_URI", f"{base}/auth/callback"))
+
+    result = await exchange_code(oidc_config, code, redirect_uri)
+
+    if "error" in result:
+        print(f"[auth] Token exchange failed: {result}")
+        raise HTTPException(status_code=502, detail="Token exchange failed")
+
+    # Extract user info from ID token if present
+    user = {}
+    id_token = result.get("id_token", "")
+    if id_token:
+        user = extract_user_from_id_token(id_token)
+
+    return {
+        "access_token": result.get("access_token", ""),
+        "id_token": id_token,
+        "refresh_token": result.get("refresh_token", ""),
+        "expires_in": result.get("expires_in", 0),
+        "user": user,
+    }
+
+
+@post("/api/auth/refresh")
+async def auth_refresh(data: dict[str, str]) -> dict[str, Any]:
+    """Refresh tokens using a refresh_token.
+
+    Request body:
+        refresh_token: str — the refresh token
+    """
+    if oidc_config is None or not oidc_config.configured:
+        raise HTTPException(status_code=503, detail="OIDC not configured")
+
+    refresh_token_value = data.get("refresh_token", "")
+    if not refresh_token_value:
+        raise HTTPException(status_code=400, detail="Refresh token is required")
+
+    result = await refresh_tokens(oidc_config, refresh_token_value)
+
+    if "error" in result:
+        print(f"[auth] Token refresh failed: {result}")
+        raise HTTPException(status_code=502, detail="Token refresh failed")
+
+    # Extract updated user info from new ID token
+    user = {}
+    id_token = result.get("id_token", "")
+    if id_token:
+        user = extract_user_from_id_token(id_token)
+
+    return {
+        "access_token": result.get("access_token", ""),
+        "id_token": id_token,
+        "refresh_token": result.get("refresh_token", refresh_token_value),
+        "expires_in": result.get("expires_in", 0),
+        "user": user,
+    }
+
+
+@get("/api/auth/me")
+async def auth_me(request: Request) -> dict[str, Any]:
+    """Get the current user's profile from the OIDC provider.
+
+    Requires Authorization: Bearer <access_token> header.
+    """
+    if oidc_config is None or not oidc_config.configured:
+        raise HTTPException(status_code=503, detail="OIDC not configured")
+
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Bearer token required")
+
+    access_token = auth_header[7:]
+    result = await fetch_userinfo(oidc_config, access_token)
+
+    if "error" in result:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+    return {
+        "id": result.get("sub", ""),
+        "name": result.get("name", result.get("nickname", result.get("email", ""))),
+        "email": result.get("email", ""),
+    }
+
+
+# ─────────────────────────────────────────────
 # App
 # ─────────────────────────────────────────────
 
@@ -1046,6 +1188,11 @@ app = Litestar(
         health,
         index_route,
         room_route,
+        auth_callback_route,
+        auth_config,
+        auth_token,
+        auth_refresh,
+        auth_me,
         room_create,
         room_join,
         rtc_config,
