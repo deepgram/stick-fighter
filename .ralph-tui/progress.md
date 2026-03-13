@@ -26,6 +26,8 @@ after each iteration and it's included in prompts for context.
 - **Match flow pattern**: Game loop sends `round_over` with `winner`, `reason` ("ko"/"timeout"/"forfeit"), and health. Client calls `POST /api/match/complete` (transitions to finished, updates ELO). Rematch via `POST /api/room/rematch` resets to "selecting". Leave clears localStorage room data.
 - **Disconnect grace period**: `GameLoopManager.start_disconnect_timer(code, player)` starts a 10s countdown in the game loop tick. Timer decrements by `TICK_INTERVAL` each tick. Expiry → `room.forfeit_winner` set → `round_over`. Timer cancelled on reconnect via `cancel_disconnect_timer()`.
 - **Controller → ELO category mapping**: UI mode IDs ("controller", "voice", "phone") differ from ELO categories ("keyboard", "voice"). `elo.controller_to_category()` bridges the gap. "controller" and "keyboard" both map to "keyboard" category.
+- **Room cleanup pattern**: `room_cleanup.py` has `RoomCleanupTask` that periodically sweeps (every 30s) in-memory rooms against Redis. Expired rooms get `room_expired` sent to WebSocket clients, then game loop + signaling cleaned up. Also sweeps matchmaking queue entries whose TTL keys expired. Started/stopped via server lifespan.
+- **Matchmaking queue TTL pattern**: Two-key pattern in `room_manager.py` — sorted set `matchmaking:{category}` for ELO-scored queue, plus per-player TTL key `matchmaking_ttl:{category}:{player_id}` that auto-expires. Cleanup sweep removes orphaned sorted set entries whose TTL key is gone.
 
 ---
 
@@ -336,4 +338,28 @@ after each iteration and it's included in prompts for context.
   - `forfeit_winner` must be checked with `is not None` not truthiness — `0` would be falsy but `forfeit_winner` is 1 or 2
   - mypy catches redefined variables in the same scope — variable type annotations (`winner: int | None`) conflict with earlier assignments of different types
   - WebSocket handler was missing `seq` forwarding to input queue — this affected server-side prediction tracking
+---
+
+## 2026-03-13 - stick-fighter-d4c.8
+- Implemented room auto-expiry and cleanup for US-004
+- Periodic `RoomCleanupTask` sweeps every 30s: cross-references in-memory game loops and signaling sessions against Redis, cleans up orphans
+- Sends `room_expired` WebSocket message to connected players before cleanup — clients close WebRTC gracefully and navigate to landing
+- Matchmaking queue TTL infrastructure: two-key pattern (sorted set + per-player TTL key) with `matchmaking_join`, `matchmaking_leave`, `matchmaking_cleanup_expired` methods
+- Cleanup task also sweeps expired matchmaking queue entries for both "keyboard" and "voice" categories
+- Integrated into server lifespan: `RoomCleanupTask` starts on boot, stops on shutdown (before game loop stop_all)
+- Client-side `handleRoomExpired()` stops game, closes WebRTC, clears localStorage room data, shows alert
+- 15 new Python tests (cleanup task: sweep empty/active/expired, notifications, send errors, matchmaking sweep, lifecycle)
+- 10 new matchmaking queue tests in test_room_manager.py
+- Files changed:
+  - `room_cleanup.py` — New: RoomCleanupTask class with periodic sweep, room expiry notification, matchmaking cleanup
+  - `room_manager.py` — Added MATCHMAKING_ENTRY_TTL constant, matchmaking_join/leave/cleanup_expired methods
+  - `server.py` — Added RoomCleanupTask import/global/lifespan integration (start on boot, stop on shutdown)
+  - `src/main.js` — Added room_expired handler in onServerState, handleRoomExpired function
+  - `tests/test_room_cleanup.py` — New: 15 tests across 7 test classes
+  - `tests/test_room_manager.py` — Added TestMatchmakingQueue (10 tests), updated imports
+- **Learnings:**
+  - Polling (periodic sweep) is more portable than Redis keyspace notifications — doesn't require special server config and handles edge cases like server restarts
+  - Two-key pattern (sorted set + TTL key) cleanly separates fast range queries from auto-expiry without custom expiry logic
+  - Cleanup must notify WebSocket clients _before_ stopping the game loop — once stop_loop runs, player connections are marked disconnected and send_data fails
+  - `TYPE_CHECKING` guard for imports avoids circular dependency between room_cleanup.py and the modules it cleans up
 ---

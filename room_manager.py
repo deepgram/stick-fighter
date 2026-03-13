@@ -17,6 +17,7 @@ import redis.asyncio as aioredis  # type: ignore[import-untyped]
 # ─────────────────────────────────────────────
 
 ROOM_TTL = 300  # 5 minutes
+MATCHMAKING_ENTRY_TTL = 120  # 2 minutes — queue entries expire if player disconnects
 
 ROOM_STATUSES = ("waiting", "selecting", "fighting", "finished")
 
@@ -198,3 +199,54 @@ class RoomManager:
     async def delete_room(self, code: str) -> bool:
         """Explicitly delete a room. Returns True if it existed."""
         return bool(await self._redis.delete(_room_key(code)))  # type: ignore[misc]
+
+    # ─────────────────────────────────────────────
+    # Matchmaking queue with TTL
+    # ─────────────────────────────────────────────
+
+    async def matchmaking_join(self, category: str, player_id: str, elo: float) -> bool:
+        """Add a player to the matchmaking queue with an auto-expiring TTL key.
+
+        The sorted set ``matchmaking:{category}`` holds player_id scored by ELO.
+        A companion key ``matchmaking_ttl:{category}:{player_id}`` expires after
+        ``MATCHMAKING_ENTRY_TTL`` — the cleanup sweep removes orphaned entries.
+
+        Returns True if the player was added (False if already in queue).
+        """
+        queue_key = f"matchmaking:{category}"
+        ttl_key = f"matchmaking_ttl:{category}:{player_id}"
+
+        # Check if already queued
+        existing = await self._redis.zscore(queue_key, player_id)  # type: ignore[misc]
+        if existing is not None:
+            # Refresh TTL on re-join
+            await self._redis.expire(ttl_key, MATCHMAKING_ENTRY_TTL)  # type: ignore[misc]
+            return False
+
+        await self._redis.zadd(queue_key, {player_id: elo})  # type: ignore[misc]
+        await self._redis.set(ttl_key, "1", ex=MATCHMAKING_ENTRY_TTL)  # type: ignore[misc]
+        return True
+
+    async def matchmaking_leave(self, category: str, player_id: str) -> bool:
+        """Remove a player from the matchmaking queue. Returns True if they were queued."""
+        queue_key = f"matchmaking:{category}"
+        ttl_key = f"matchmaking_ttl:{category}:{player_id}"
+
+        removed = await self._redis.zrem(queue_key, player_id)  # type: ignore[misc]
+        await self._redis.delete(ttl_key)  # type: ignore[misc]
+        return bool(removed)
+
+    async def matchmaking_cleanup_expired(self, category: str) -> list[str]:
+        """Remove queue entries whose TTL key has expired. Returns removed player IDs."""
+        queue_key = f"matchmaking:{category}"
+        members: list[str] = await self._redis.zrange(queue_key, 0, -1)  # type: ignore[misc]
+        removed: list[str] = []
+
+        for player_id in members:
+            ttl_key = f"matchmaking_ttl:{category}:{player_id}"
+            exists = await self._redis.exists(ttl_key)  # type: ignore[misc]
+            if not exists:
+                await self._redis.zrem(queue_key, player_id)  # type: ignore[misc]
+                removed.append(player_id)
+
+        return removed

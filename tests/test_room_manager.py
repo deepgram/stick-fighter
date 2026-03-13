@@ -6,6 +6,7 @@ import pytest
 import pytest_asyncio
 
 from room_manager import (
+    MATCHMAKING_ENTRY_TTL,
     ROOM_TTL,
     RoomManager,
     generate_room_code,
@@ -352,3 +353,88 @@ class TestResetForRematch:
     async def test_rematch_nonexistent_room_raises(self, manager: RoomManager) -> None:
         with pytest.raises(ValueError, match="Room not found"):
             await manager.reset_for_rematch("nonexistent-room-code")
+
+
+# ─── Matchmaking queue with TTL ──────────────────
+
+
+class TestMatchmakingQueue:
+    @pytest.mark.asyncio
+    async def test_join_adds_to_queue(self, manager: RoomManager, redis) -> None:
+        result = await manager.matchmaking_join("keyboard", "player-1", 1000.0)
+        assert result is True
+        score = await redis.zscore("matchmaking:keyboard", "player-1")
+        assert score == 1000.0
+
+    @pytest.mark.asyncio
+    async def test_join_sets_ttl_key(self, manager: RoomManager, redis) -> None:
+        await manager.matchmaking_join("keyboard", "player-1", 1000.0)
+        ttl = await redis.ttl("matchmaking_ttl:keyboard:player-1")
+        assert 0 < ttl <= MATCHMAKING_ENTRY_TTL
+
+    @pytest.mark.asyncio
+    async def test_join_duplicate_returns_false(self, manager: RoomManager) -> None:
+        await manager.matchmaking_join("keyboard", "player-1", 1000.0)
+        result = await manager.matchmaking_join("keyboard", "player-1", 1050.0)
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_join_duplicate_refreshes_ttl(self, manager: RoomManager, redis) -> None:
+        await manager.matchmaking_join("keyboard", "player-1", 1000.0)
+        # Reduce TTL artificially
+        await redis.expire("matchmaking_ttl:keyboard:player-1", 30)
+        await manager.matchmaking_join("keyboard", "player-1", 1000.0)
+        ttl = await redis.ttl("matchmaking_ttl:keyboard:player-1")
+        assert ttl > 30
+
+    @pytest.mark.asyncio
+    async def test_leave_removes_from_queue(self, manager: RoomManager, redis) -> None:
+        await manager.matchmaking_join("keyboard", "player-1", 1000.0)
+        result = await manager.matchmaking_leave("keyboard", "player-1")
+        assert result is True
+        score = await redis.zscore("matchmaking:keyboard", "player-1")
+        assert score is None
+
+    @pytest.mark.asyncio
+    async def test_leave_removes_ttl_key(self, manager: RoomManager, redis) -> None:
+        await manager.matchmaking_join("keyboard", "player-1", 1000.0)
+        await manager.matchmaking_leave("keyboard", "player-1")
+        exists = await redis.exists("matchmaking_ttl:keyboard:player-1")
+        assert not exists
+
+    @pytest.mark.asyncio
+    async def test_leave_nonexistent_returns_false(self, manager: RoomManager) -> None:
+        result = await manager.matchmaking_leave("keyboard", "nobody")
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_cleanup_removes_expired_entries(self, manager: RoomManager, redis) -> None:
+        await manager.matchmaking_join("voice", "player-1", 1000.0)
+        await manager.matchmaking_join("voice", "player-2", 1100.0)
+
+        # Simulate TTL expiry for player-1
+        await redis.delete("matchmaking_ttl:voice:player-1")
+
+        removed = await manager.matchmaking_cleanup_expired("voice")
+        assert "player-1" in removed
+        assert "player-2" not in removed
+
+        # player-1 gone from sorted set, player-2 still there
+        assert await redis.zscore("matchmaking:voice", "player-1") is None
+        assert await redis.zscore("matchmaking:voice", "player-2") is not None
+
+    @pytest.mark.asyncio
+    async def test_cleanup_empty_queue(self, manager: RoomManager) -> None:
+        removed = await manager.matchmaking_cleanup_expired("keyboard")
+        assert removed == []
+
+    @pytest.mark.asyncio
+    async def test_separate_categories(self, manager: RoomManager, redis) -> None:
+        await manager.matchmaking_join("keyboard", "player-1", 1000.0)
+        await manager.matchmaking_join("voice", "player-1", 900.0)
+
+        # Leave keyboard queue only
+        await manager.matchmaking_leave("keyboard", "player-1")
+
+        assert await redis.zscore("matchmaking:keyboard", "player-1") is None
+        assert await redis.zscore("matchmaking:voice", "player-1") == 900.0

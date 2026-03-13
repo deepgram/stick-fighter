@@ -545,6 +545,9 @@ function startMultiplayerFight(_roomData) {
         game.roundOver = true;
         handleMultiplayerRoundOver(msg);
       }
+      if (msg.type === 'room_expired') {
+        handleRoomExpired();
+      }
     });
 
     peerConnection.connect();
@@ -685,6 +688,23 @@ function showEloChanges(elo, myNum) {
     `;
   }
   eloEl.classList.remove('hidden');
+}
+
+/** Handle room expiry — server cleaned up the room due to inactivity TTL */
+function handleRoomExpired() {
+  console.log('[room] Room expired due to inactivity');
+  // Stop game and clean up all connections gracefully
+  if (game) { game.running = false; game = null; }
+  cleanupAdapters();
+  if (peerConnection) { peerConnection.close(); peerConnection = null; }
+  stopRoomPolling();
+  // Clear room data from localStorage
+  localStorage.removeItem('sf_roomCode');
+  localStorage.removeItem('sf_playerId');
+  localStorage.removeItem('sf_playerNum');
+  // Show landing with a brief alert
+  showLanding();
+  alert('Room expired due to inactivity.');
 }
 
 // Results screen: Rematch button

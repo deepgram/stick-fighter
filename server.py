@@ -33,6 +33,7 @@ from game_loop import GameLoopManager
 from signaling import SignalingManager, ICE_SERVERS
 from auth import OIDCConfig, exchange_code, refresh_tokens, fetch_userinfo, extract_user_from_id_token
 from elo import EloManager, controller_to_category
+from room_cleanup import RoomCleanupTask
 
 # ─────────────────────────────────────────────
 # Config
@@ -49,12 +50,13 @@ game_loop_manager: GameLoopManager | None = None
 signaling_manager: SignalingManager | None = None
 oidc_config: OIDCConfig | None = None
 elo_manager: EloManager | None = None
+cleanup_task: RoomCleanupTask | None = None
 
 
 @asynccontextmanager
 async def lifespan(app: Litestar) -> AsyncGenerator[None, None]:
     """Start/stop the Redis connection pool and game loop manager."""
-    global room_manager, game_loop_manager, signaling_manager, oidc_config, elo_manager  # noqa: PLW0603
+    global room_manager, game_loop_manager, signaling_manager, oidc_config, elo_manager, cleanup_task  # noqa: PLW0603
     redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379")
     pool = aioredis.from_url(redis_url, decode_responses=True)
     room_manager = RoomManager(pool)
@@ -62,6 +64,8 @@ async def lifespan(app: Litestar) -> AsyncGenerator[None, None]:
     signaling_manager = SignalingManager()
     oidc_config = OIDCConfig.from_env()
     elo_manager = EloManager(pool)
+    cleanup_task = RoomCleanupTask(room_manager, game_loop_manager, signaling_manager)
+    cleanup_task.start()
     if oidc_config.configured:
         print(f"[auth] OIDC configured: issuer={oidc_config.issuer}")
     else:
@@ -70,6 +74,9 @@ async def lifespan(app: Litestar) -> AsyncGenerator[None, None]:
     try:
         yield
     finally:
+        if cleanup_task is not None:
+            await cleanup_task.stop()
+        cleanup_task = None
         if game_loop_manager is not None:
             await game_loop_manager.stop_all()
         game_loop_manager = None
