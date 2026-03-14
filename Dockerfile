@@ -27,4 +27,4 @@ COPY public/ public/
 
 EXPOSE 8080
 
-CMD [".venv/bin/uvicorn", "server:app", "--host", "::", "--port", "8080"]
+CMD [".venv/bin/uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8080"]
