@@ -1074,10 +1074,18 @@ document.getElementById('btn-char-back').addEventListener('click', () => showScr
 // ─────────────────────────────────────────────
 // Leaderboard
 // ─────────────────────────────────────────────
-let lbCategory = 'all';
+/** Determine the default leaderboard league from the player's most recent controller. */
+function defaultLeaderboardCategory() {
+  const modeIdx = parseInt(localStorage.getItem('sf_p1Mode') || '0', 10);
+  // INPUT_MODES: 0=controller(keyboard), 1=voice, 2=phone, 3=simulated, 4=llm
+  if (modeIdx === 1 || modeIdx === 2) return 'voice';
+  if (modeIdx === 0) return 'keyboard';
+  return 'voice'; // default for non-ranked modes
+}
+let lbCategory = defaultLeaderboardCategory();
 
 /** Fetch and render the leaderboard */
-async function loadLeaderboard(category = 'all') {
+async function loadLeaderboard(category = lbCategory) {
   lbCategory = category;
 
   // Update filter button states

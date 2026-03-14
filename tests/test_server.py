@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import time
+from unittest.mock import AsyncMock, MagicMock
 
 import fakeredis
 import fakeredis.aioredis
@@ -830,4 +831,66 @@ class TestMatchmakingCancel:
                 content=json.dumps({"playerId": "x"}),
                 headers={"Content-Type": "application/json"},
             )
+            assert resp.status_code == 503
+
+
+# ─── Leaderboard endpoint ─────────────────────
+
+
+@pytest.fixture()
+def lb_client():
+    """TestClient with a mocked EloManager for leaderboard tests."""
+    with TestClient(app=app) as client:
+        mock_elo = MagicMock()
+        mock_elo.get_leaderboard = AsyncMock(return_value=[])
+        mock_elo.get_rating = AsyncMock(return_value={
+            "user_id": "u1", "category": "voice", "rating": 1000,
+            "wins": 0, "losses": 0, "draws": 0, "matches": 0,
+        })
+        mock_elo.get_player_rank = AsyncMock(return_value=None)
+        mock_elo.get_player_name = AsyncMock(return_value="Test")
+        server.elo_manager = mock_elo
+        yield client
+        server.elo_manager = None
+
+
+class TestLeaderboardEndpoint:
+    def test_category_all_returns_400(self, lb_client) -> None:
+        resp = lb_client.get("/api/leaderboard?category=all")
+        assert resp.status_code == 400
+
+    def test_category_invalid_returns_400(self, lb_client) -> None:
+        resp = lb_client.get("/api/leaderboard?category=magic")
+        assert resp.status_code == 400
+
+    def test_category_voice_returns_200(self, lb_client) -> None:
+        resp = lb_client.get("/api/leaderboard?category=voice")
+        assert resp.status_code == 200
+        assert resp.json()["category"] == "voice"
+
+    def test_category_keyboard_returns_200(self, lb_client) -> None:
+        resp = lb_client.get("/api/leaderboard?category=keyboard")
+        assert resp.status_code == 200
+        assert resp.json()["category"] == "keyboard"
+
+    def test_default_category_is_voice(self, lb_client) -> None:
+        resp = lb_client.get("/api/leaderboard")
+        assert resp.status_code == 200
+        assert resp.json()["category"] == "voice"
+
+    def test_viewer_included_when_ranked(self, lb_client) -> None:
+        mock_elo = server.elo_manager
+        assert mock_elo is not None
+        mock_elo.get_player_rank = AsyncMock(return_value=5)  # type: ignore[method-assign]
+        resp = lb_client.get("/api/leaderboard?category=voice&user_id=u1")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["viewer"] is not None
+        assert data["viewer"]["rank"] == 5
+        assert data["viewer"]["input_mode"] == "voice"
+
+    def test_without_elo_manager_returns_503(self) -> None:
+        with TestClient(app=app) as client:
+            server.elo_manager = None
+            resp = client.get("/api/leaderboard?category=voice")
             assert resp.status_code == 503

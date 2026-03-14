@@ -10,7 +10,24 @@ after each iteration and it's included in prompts for context.
 - **TestClient fixtures**: `room_client` fixture injects fakeredis-backed RoomManager. Use `monkeypatch` for env var tests.
 - **LLM endpoint retry pattern**: `llm_command()` uses a for-loop retry (2 attempts), catching all exceptions from provider functions. On double failure, returns `{"plan": [...], "fallback": true}` with random commands. Frontend checks `fallback` flag for toast display.
 - **LLM provider mocking**: Patch `server._llm_anthropic` or `server._llm_openai` (AsyncMock) — the `_call_llm_provider` wrapper delegates to these.
+- **Leaderboard mock fixture**: `lb_client` fixture uses `MagicMock` + `AsyncMock` for EloManager methods. Useful for testing endpoint validation without a real PostgreSQL connection.
 
+---
+
+## 2026-03-14 - stick-fighter-j3r.6
+- Split leaderboard into distinct Voice League and Keyboard League tabs
+- Removed the merged "All" view — `category=all` now returns 400
+- Frontend defaults to the league matching the player's most recent controller (or voice if unknown)
+- Files changed:
+  - `server.py` — Removed `category=all` merge logic from `/api/leaderboard`, default changed to `voice`, error message updated
+  - `index.html` — Removed "All" filter button, renamed tabs to "Voice League" / "Keyboard League"
+  - `src/main.js` — Added `defaultLeaderboardCategory()` function that reads `sf_p1Mode` from localStorage, changed default from `'all'` to dynamic category
+  - `tests/test_server.py` — Added `lb_client` fixture with mocked EloManager; added `TestLeaderboardEndpoint` class (7 tests: all returns 400, invalid returns 400, voice/keyboard returns 200, default is voice, viewer included when ranked, 503 without manager)
+- **Learnings:**
+  - The backend already tracked ELO separately per category — the "All" view was computed on-the-fly by merging both leaderboards. Removing it was purely subtractive on the server side.
+  - `MagicMock` with `AsyncMock` methods works well for testing Litestar endpoints that call async database methods, avoiding the need for a real PostgreSQL connection in unit tests.
+  - `mypy` flags `server.elo_manager.some_method = AsyncMock(...)` as `method-assign` + `union-attr` — work around by assigning to a local variable with an assert-not-None guard.
+  - All quality gates: 432 Python tests, ruff, mypy, 87 JS tests pass
 ---
 
 ## 2026-03-14 - stick-fighter-j3r.2
