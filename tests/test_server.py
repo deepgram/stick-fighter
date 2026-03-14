@@ -102,6 +102,26 @@ class TestRoomCreate:
         assert "url" in data
         assert f"/room/{data['code']}" in data["url"]
 
+    def test_create_url_uses_base_url_env(self, room_client, monkeypatch) -> None:
+        monkeypatch.setenv("BASE_URL", "https://fight.dx.deepgram.com")
+        resp = room_client.post("/api/room/create")
+        data = resp.json()
+        assert data["url"].startswith("https://fight.dx.deepgram.com/room/")
+
+    def test_create_url_strips_trailing_slash(self, room_client, monkeypatch) -> None:
+        monkeypatch.setenv("BASE_URL", "https://fight.dx.deepgram.com/")
+        resp = room_client.post("/api/room/create")
+        data = resp.json()
+        assert "//room/" not in data["url"]
+        assert data["url"].startswith("https://fight.dx.deepgram.com/room/")
+
+    def test_create_url_falls_back_to_request_host(self, room_client, monkeypatch) -> None:
+        monkeypatch.delenv("BASE_URL", raising=False)
+        resp = room_client.post("/api/room/create")
+        data = resp.json()
+        # Falls back to request base_url (testclient uses http://testserver.local)
+        assert "/room/" in data["url"]
+
     def test_create_assigns_player_as_p1(self, room_client) -> None:
         """Creator gets a playerId (P1 assignment verified in room_manager tests)."""
         resp = room_client.post("/api/room/create")

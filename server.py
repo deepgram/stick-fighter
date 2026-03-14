@@ -637,8 +637,8 @@ async def room_create(request: Request) -> dict[str, str]:
     player_id = str(uuid.uuid4())
     room = await room_manager.create_room(player_id)
 
-    # Build shareable URL from request origin
-    base = str(request.base_url).rstrip("/")
+    # Build shareable URL: prefer BASE_URL env var, fall back to request origin
+    base = os.environ.get("BASE_URL", "").rstrip("/") or str(request.base_url).rstrip("/")
     code = room["code"]
 
     return {

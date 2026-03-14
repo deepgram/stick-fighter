@@ -1,301 +1,76 @@
 {
   "version": 1,
-  "sessionId": "c3614eb9-d39b-4e7a-b069-fb1bdd08a70c",
+  "sessionId": "e943ccda-cca9-492d-8e6d-a07660cc75be",
   "status": "running",
-  "startedAt": "2026-03-13T14:38:07.817Z",
-  "updatedAt": "2026-03-13T17:06:12.837Z",
-  "currentIteration": 17,
+  "startedAt": "2026-03-14T11:01:24.391Z",
+  "updatedAt": "2026-03-14T11:04:19.310Z",
+  "currentIteration": 0,
   "maxIterations": 0,
-  "tasksCompleted": 17,
+  "tasksCompleted": 0,
   "isPaused": false,
   "agentPlugin": "claude",
   "trackerState": {
     "plugin": "beads",
-    "epicId": "stick-fighter-d4c",
-    "totalTasks": 18,
+    "epicId": "stick-fighter-j3r",
+    "totalTasks": 9,
     "tasks": [
       {
-        "id": "stick-fighter-d4c.3",
-        "title": "US-010: Landing page with mode selection",
-        "status": "completed",
-        "completedInSession": true
-      },
-      {
-        "id": "stick-fighter-d4c.2",
-        "title": "US-005: Port core game logic to Python",
-        "status": "completed",
-        "completedInSession": true
-      },
-      {
-        "id": "stick-fighter-d4c.1",
-        "title": "US-001: Redis room state management",
-        "status": "completed",
-        "completedInSession": true
-      },
-      {
-        "id": "stick-fighter-d4c.9",
-        "title": "US-007: WebRTC signaling server",
-        "status": "completed",
-        "completedInSession": true
-      },
-      {
-        "id": "stick-fighter-d4c.7",
-        "title": "US-003: Room joining via code or URL",
-        "status": "completed",
-        "completedInSession": true
-      },
-      {
-        "id": "stick-fighter-d4c.6",
-        "title": "US-006: Server game loop with input processing and state broadcast",
-        "status": "completed",
-        "completedInSession": true
-      },
-      {
-        "id": "stick-fighter-d4c.5",
-        "title": "US-002: Room creation with word-based codes",
-        "status": "completed",
-        "completedInSession": true
-      },
-      {
-        "id": "stick-fighter-d4c.4",
-        "title": "US-013: Optional login via id.dx.deepgram.com",
-        "status": "completed",
-        "completedInSession": true
-      },
-      {
-        "id": "stick-fighter-d4c.14",
-        "title": "US-014: ELO rating system",
-        "status": "completed",
-        "completedInSession": true
-      },
-      {
-        "id": "stick-fighter-d4c.13",
-        "title": "US-012: Multiplayer match flow end-to-end",
-        "status": "completed",
-        "completedInSession": true
-      },
-      {
-        "id": "stick-fighter-d4c.12",
-        "title": "US-011: Controller selection per player in rooms",
-        "status": "completed",
-        "completedInSession": true
-      },
-      {
-        "id": "stick-fighter-d4c.11",
-        "title": "US-009: Client-side prediction and rollback reconciliation",
-        "status": "completed",
-        "completedInSession": true
-      },
-      {
-        "id": "stick-fighter-d4c.10",
-        "title": "US-008: WebRTC data channel for peer input exchange",
-        "status": "completed",
-        "completedInSession": true
-      },
-      {
-        "id": "stick-fighter-d4c.8",
-        "title": "US-004: Room auto-expiry and cleanup",
-        "status": "completed",
-        "completedInSession": true
-      },
-      {
-        "id": "stick-fighter-d4c.18",
-        "title": "US-018: Distinct AI fighting personalities",
+        "id": "stick-fighter-j3r.2",
+        "title": "US-002: Fix room share URL domain",
         "status": "open",
         "completedInSession": false
       },
       {
-        "id": "stick-fighter-d4c.17",
-        "title": "US-016: Global leaderboard page",
-        "status": "completed",
-        "completedInSession": true
+        "id": "stick-fighter-j3r.1",
+        "title": "US-001: Fix LLM fighter API integration",
+        "status": "open",
+        "completedInSession": false
       },
       {
-        "id": "stick-fighter-d4c.16",
-        "title": "US-015: ELO matchmaking queue",
-        "status": "completed",
-        "completedInSession": true
+        "id": "stick-fighter-j3r.6",
+        "title": "US-009: Distinct voice and keyboard leaderboard leagues",
+        "status": "open",
+        "completedInSession": false
       },
       {
-        "id": "stick-fighter-d4c.15",
-        "title": "US-017: Single-player LLM character selection",
-        "status": "completed",
-        "completedInSession": true
+        "id": "stick-fighter-j3r.5",
+        "title": "US-008: Remove P2 keyboard option in classic mode",
+        "status": "open",
+        "completedInSession": false
+      },
+      {
+        "id": "stick-fighter-j3r.4",
+        "title": "US-004: Controller select joins game with opponent wait timer",
+        "status": "open",
+        "completedInSession": false
+      },
+      {
+        "id": "stick-fighter-j3r.3",
+        "title": "US-003: Restrict MP controller selection to keyboard, voice, and phone",
+        "status": "open",
+        "completedInSession": false
+      },
+      {
+        "id": "stick-fighter-j3r.9",
+        "title": "US-007: Keyboard navigation for all menu screens",
+        "status": "open",
+        "completedInSession": false
+      },
+      {
+        "id": "stick-fighter-j3r.8",
+        "title": "US-006: Add status feedback for async operations",
+        "status": "open",
+        "completedInSession": false
+      },
+      {
+        "id": "stick-fighter-j3r.7",
+        "title": "US-005: Add step indicators and instructions to all screens",
+        "status": "open",
+        "completedInSession": false
       }
     ]
   },
-  "iterations": [
-    {
-      "iteration": 1,
-      "status": "completed",
-      "taskId": "stick-fighter-d4c.3",
-      "taskTitle": "US-010: Landing page with mode selection",
-      "taskCompleted": true,
-      "durationMs": 789582,
-      "startedAt": "2026-03-13T14:38:10.548Z",
-      "endedAt": "2026-03-13T14:51:20.130Z"
-    },
-    {
-      "iteration": 2,
-      "status": "completed",
-      "taskId": "stick-fighter-d4c.2",
-      "taskTitle": "US-005: Port core game logic to Python",
-      "taskCompleted": true,
-      "durationMs": 1063518,
-      "startedAt": "2026-03-13T14:51:22.081Z",
-      "endedAt": "2026-03-13T15:09:05.599Z"
-    },
-    {
-      "iteration": 3,
-      "status": "completed",
-      "taskId": "stick-fighter-d4c.1",
-      "taskTitle": "US-001: Redis room state management",
-      "taskCompleted": true,
-      "durationMs": 268156,
-      "startedAt": "2026-03-13T15:09:07.269Z",
-      "endedAt": "2026-03-13T15:13:35.425Z"
-    },
-    {
-      "iteration": 4,
-      "status": "completed",
-      "taskId": "stick-fighter-d4c.6",
-      "taskTitle": "US-006: Server game loop with input processing and state broadcast",
-      "taskCompleted": true,
-      "durationMs": 394263,
-      "startedAt": "2026-03-13T15:13:37.102Z",
-      "endedAt": "2026-03-13T15:20:11.365Z"
-    },
-    {
-      "iteration": 5,
-      "status": "completed",
-      "taskId": "stick-fighter-d4c.5",
-      "taskTitle": "US-002: Room creation with word-based codes",
-      "taskCompleted": true,
-      "durationMs": 373849,
-      "startedAt": "2026-03-13T15:20:13.046Z",
-      "endedAt": "2026-03-13T15:26:26.895Z"
-    },
-    {
-      "iteration": 6,
-      "status": "completed",
-      "taskId": "stick-fighter-d4c.9",
-      "taskTitle": "US-007: WebRTC signaling server",
-      "taskCompleted": true,
-      "durationMs": 342136,
-      "startedAt": "2026-03-13T15:26:28.725Z",
-      "endedAt": "2026-03-13T15:32:10.861Z"
-    },
-    {
-      "iteration": 7,
-      "status": "completed",
-      "taskId": "stick-fighter-d4c.7",
-      "taskTitle": "US-003: Room joining via code or URL",
-      "taskCompleted": true,
-      "durationMs": 216203,
-      "startedAt": "2026-03-13T15:32:12.548Z",
-      "endedAt": "2026-03-13T15:35:48.751Z"
-    },
-    {
-      "iteration": 8,
-      "status": "completed",
-      "taskId": "stick-fighter-d4c.4",
-      "taskTitle": "US-013: Optional login via id.dx.deepgram.com",
-      "taskCompleted": true,
-      "durationMs": 412637,
-      "startedAt": "2026-03-13T15:35:50.379Z",
-      "endedAt": "2026-03-13T15:42:43.016Z"
-    },
-    {
-      "iteration": 9,
-      "status": "completed",
-      "taskId": "stick-fighter-d4c.14",
-      "taskTitle": "US-014: ELO rating system",
-      "taskCompleted": true,
-      "durationMs": 261375,
-      "startedAt": "2026-03-13T15:42:44.687Z",
-      "endedAt": "2026-03-13T15:47:06.062Z"
-    },
-    {
-      "iteration": 10,
-      "status": "completed",
-      "taskId": "stick-fighter-d4c.12",
-      "taskTitle": "US-011: Controller selection per player in rooms",
-      "taskCompleted": true,
-      "durationMs": 367548,
-      "startedAt": "2026-03-13T15:47:07.898Z",
-      "endedAt": "2026-03-13T15:53:15.446Z"
-    },
-    {
-      "iteration": 11,
-      "status": "completed",
-      "taskId": "stick-fighter-d4c.10",
-      "taskTitle": "US-008: WebRTC data channel for peer input exchange",
-      "taskCompleted": true,
-      "durationMs": 489199,
-      "startedAt": "2026-03-13T15:53:17.096Z",
-      "endedAt": "2026-03-13T16:01:26.295Z"
-    },
-    {
-      "iteration": 12,
-      "status": "completed",
-      "taskId": "stick-fighter-d4c.11",
-      "taskTitle": "US-009: Client-side prediction and rollback reconciliation",
-      "taskCompleted": true,
-      "durationMs": 992138,
-      "startedAt": "2026-03-13T16:01:27.999Z",
-      "endedAt": "2026-03-13T16:18:00.137Z"
-    },
-    {
-      "iteration": 13,
-      "status": "completed",
-      "taskId": "stick-fighter-d4c.13",
-      "taskTitle": "US-012: Multiplayer match flow end-to-end",
-      "taskCompleted": true,
-      "durationMs": 498960,
-      "startedAt": "2026-03-13T16:18:01.869Z",
-      "endedAt": "2026-03-13T16:26:20.829Z"
-    },
-    {
-      "iteration": 14,
-      "status": "completed",
-      "taskId": "stick-fighter-d4c.8",
-      "taskTitle": "US-004: Room auto-expiry and cleanup",
-      "taskCompleted": true,
-      "durationMs": 475154,
-      "startedAt": "2026-03-13T16:26:22.536Z",
-      "endedAt": "2026-03-13T16:34:17.690Z"
-    },
-    {
-      "iteration": 15,
-      "status": "completed",
-      "taskId": "stick-fighter-d4c.17",
-      "taskTitle": "US-016: Global leaderboard page",
-      "taskCompleted": true,
-      "durationMs": 386070,
-      "startedAt": "2026-03-13T16:34:19.380Z",
-      "endedAt": "2026-03-13T16:40:45.450Z"
-    },
-    {
-      "iteration": 16,
-      "status": "completed",
-      "taskId": "stick-fighter-d4c.16",
-      "taskTitle": "US-015: ELO matchmaking queue",
-      "taskCompleted": true,
-      "durationMs": 818713,
-      "startedAt": "2026-03-13T16:40:47.216Z",
-      "endedAt": "2026-03-13T16:54:25.929Z"
-    },
-    {
-      "iteration": 17,
-      "status": "completed",
-      "taskId": "stick-fighter-d4c.15",
-      "taskTitle": "US-017: Single-player LLM character selection",
-      "taskCompleted": true,
-      "durationMs": 488762,
-      "startedAt": "2026-03-13T16:54:27.633Z",
-      "endedAt": "2026-03-13T17:02:36.395Z"
-    }
-  ],
+  "iterations": [],
   "skippedTaskIds": [],
   "cwd": "/Users/lukeoliff/Projects/deepgram/stick-fighter",
   "activeTaskIds": [],
