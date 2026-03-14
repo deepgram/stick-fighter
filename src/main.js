@@ -1824,42 +1824,24 @@ function _setupUsernameEdit() {
   });
 }
 
-/** Initialize auth — check config, handle callback, restore session */
+/** Initialize auth — check session from server cookie */
 async function initAuth() {
   const configured = await isAuthConfigured();
 
   if (!configured) {
     // OIDC not configured — hide auth UI entirely
     headerAuth?.classList.add('hidden');
-    return;
+    return false;
   }
 
-  // Check if this is an auth callback
-  const route = parseRoute();
-  if (route.type === 'auth-callback') {
-    const user = await handleCallback();
-    if (user) {
-      console.log('[auth] Logged in as:', user.name);
-    }
-    updateAuthUI();
-    // Route to the intended destination after login (e.g. /multiplayer)
-    const returnPath = window.location.pathname;
-    if (returnPath === '/multiplayer') {
-      showScreen('multiplayer');
-    } else {
-      showScreen('landing');
-    }
-    return true; // Signal that we handled the route
-  }
-
-  // Try to restore existing session (refresh token if needed)
+  // Check session from server cookie
   await checkAuth();
   updateAuthUI();
 
   // Show login button for anonymous users
   if (!isLoggedIn()) {
     headerAuth?.classList.remove('hidden');
-    document.getElementById('btn-auth-login')?.addEventListener('click', login);
+    document.getElementById('btn-auth-login')?.addEventListener('click', () => login());
   }
 
   return false;

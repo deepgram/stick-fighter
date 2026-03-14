@@ -5,9 +5,11 @@ load_dotenv()
 
 import asyncio
 import base64
+import hashlib
 import json
 import os
 import random
+import secrets
 import time
 import uuid
 from collections.abc import AsyncGenerator
@@ -15,7 +17,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlencode
 
 import asyncpg  # type: ignore[import-untyped]
 import httpx
@@ -1457,10 +1459,94 @@ async def game_ws(socket: WebSocket, code: str) -> None:
 
 
 @get("/auth/callback")
-async def auth_callback_route() -> Response:
-    """Serve the game page for the OAuth callback (JS reads the query params)."""
-    html = (ROOT / "index.html").read_text()
-    return Response(content=html, media_type="text/html")
+async def auth_callback_route(request: Request) -> Response:
+    """Server-side OAuth callback — exchange code for tokens, set session cookie, redirect.
+
+    The PKCE code_verifier is retrieved from Redis (stored during /api/auth/login).
+    On success, sets a signed session cookie and redirects to /multiplayer.
+    """
+    if oidc_config is None or not oidc_config.configured:
+        return Response(content="OIDC not configured", status_code=503, media_type="text/plain")
+
+    code = request.query_params.get("code", "")
+    state = request.query_params.get("state", "")
+    error = request.query_params.get("error", "")
+
+    if error:
+        desc = request.query_params.get("error_description", "")
+        print(f"[auth] OAuth error: {error} — {desc}")
+        return _redirect_response("/", clear_cookie=True)
+
+    if not code or not state:
+        print("[auth] Missing code or state in callback")
+        return _redirect_response("/")
+
+    # Retrieve PKCE verifier + return_path from Redis
+    code_verifier = ""
+    return_path = "/multiplayer"
+    if room_manager is not None:
+        pkce_key = f"pkce:{state}"
+        pkce_data = await room_manager._redis.hgetall(pkce_key)  # type: ignore[misc]
+        if pkce_data:
+            code_verifier = pkce_data.get("code_verifier", "")
+            return_path = pkce_data.get("return_path", "/multiplayer")
+            await room_manager._redis.delete(pkce_key)  # type: ignore[misc]
+        else:
+            print(f"[auth] No PKCE data for state {state[:8]}...")
+
+    base = os.environ.get("BASE_URL", str(request.base_url).rstrip("/")).rstrip("/")
+    redirect_uri = os.environ.get("OIDC_REDIRECT_URI", f"{base}/auth/callback")
+
+    result = await exchange_code(oidc_config, code, redirect_uri, code_verifier=code_verifier)
+
+    if "error" in result:
+        print(f"[auth] Token exchange failed: {result}")
+        return _redirect_response("/")
+
+    # Extract user info from ID token
+    user: dict[str, str] = {}
+    id_token = result.get("id_token", "")
+    if id_token:
+        user = extract_user_from_id_token(id_token)
+
+    # Ensure fighter username on first login
+    if user.get("id") and elo_manager is not None:
+        fighter_name = await elo_manager.ensure_fighter_username(user["id"])
+        user["name"] = fighter_name
+
+    # Build session cookie value (JSON with user info + tokens)
+    session_data = json.dumps({
+        "user": user,
+        "access_token": result.get("access_token", ""),
+        "refresh_token": result.get("refresh_token", ""),
+    })
+
+    # Base64-encode session for cookie (simple — not signed, but over HTTPS)
+    cookie_value = base64.urlsafe_b64encode(session_data.encode()).decode()
+
+    resp = _redirect_response(return_path)
+    resp.set_cookie(
+        key="sf_session",
+        value=cookie_value,
+        max_age=86400 * 7,  # 7 days
+        path="/",
+        httponly=False,  # JS needs to read it for user info
+        secure=True,
+        samesite="lax",
+    )
+    return resp
+
+
+def _redirect_response(path: str, clear_cookie: bool = False) -> Response:
+    """Build a 302 redirect response."""
+    resp = Response(
+        content=None,
+        status_code=302,
+        headers={"Location": path},
+    )
+    if clear_cookie:
+        resp.delete_cookie(key="sf_session", path="/")
+    return resp
 
 
 @get("/multiplayer")
@@ -1470,9 +1556,81 @@ async def multiplayer_route() -> Response:
     return Response(content=html, media_type="text/html")
 
 
+@get("/api/auth/login")
+async def auth_login(request: Request) -> Response:
+    """Initiate the OIDC login flow — generates PKCE pair, stores verifier in Redis, redirects to provider.
+
+    Query params:
+        return_path: optional path to redirect to after login (default: /multiplayer)
+    """
+    if oidc_config is None or not oidc_config.configured:
+        raise HTTPException(status_code=503, detail="OIDC not configured")
+
+    return_path = request.query_params.get("return_path", "/multiplayer")
+
+    base = os.environ.get("BASE_URL", str(request.base_url).rstrip("/")).rstrip("/")
+    redirect_uri = os.environ.get("OIDC_REDIRECT_URI", f"{base}/auth/callback")
+
+    # Generate PKCE pair server-side
+    code_verifier = secrets.token_urlsafe(48)
+    digest = hashlib.sha256(code_verifier.encode()).digest()
+    code_challenge = base64.urlsafe_b64encode(digest).rstrip(b"=").decode()
+
+    # Generate state for CSRF
+    state = str(uuid.uuid4())
+
+    # Store verifier + return_path in Redis (keyed by state, 10 min TTL)
+    if room_manager is not None:
+        pkce_key = f"pkce:{state}"
+        await room_manager._redis.hset(pkce_key, mapping={  # type: ignore[misc]
+            "code_verifier": code_verifier,
+            "return_path": return_path,
+        })
+        await room_manager._redis.expire(pkce_key, 600)  # type: ignore[misc]
+
+    params = {
+        "response_type": "code",
+        "client_id": oidc_config.client_id,
+        "redirect_uri": redirect_uri,
+        "scope": oidc_config.scopes,
+        "state": state,
+        "code_challenge": code_challenge,
+        "code_challenge_method": "S256",
+    }
+    authorize_url = f"{oidc_config.authorization_endpoint}?{urlencode(params)}"
+
+    return Response(content=None, status_code=302, headers={"Location": authorize_url})
+
+
+@get("/api/auth/session")
+async def auth_session(request: Request) -> dict[str, Any]:
+    """Return the current user session from the session cookie.
+
+    Returns { authenticated: true, user: {...} } or { authenticated: false }.
+    """
+    cookie = request.cookies.get("sf_session")
+    if not cookie:
+        return {"authenticated": False}
+
+    try:
+        session_data = json.loads(base64.urlsafe_b64decode(cookie.encode()))
+        user = session_data.get("user", {})
+        if not user.get("id"):
+            return {"authenticated": False}
+        return {"authenticated": True, "user": user}
+    except Exception:
+        return {"authenticated": False}
+
+
+@get("/api/auth/logout")
+async def auth_logout() -> Response:
+    """Clear the session cookie and redirect to home."""
+    return _redirect_response("/", clear_cookie=True)
+
+
 @get("/api/auth/config")
 async def auth_config(request: Request) -> dict[str, Any]:
-    """Return OIDC configuration for the frontend to build the login URL.
+    """Return OIDC configuration for the frontend.
 
     Returns empty config if OIDC is not configured (login button hidden).
     """
@@ -1817,6 +1975,9 @@ app = Litestar(
         room_route,
         leaderboard_page,
         auth_callback_route,
+        auth_login,
+        auth_session,
+        auth_logout,
         multiplayer_route,
         auth_config,
         auth_token,

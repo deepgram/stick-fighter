@@ -642,12 +642,23 @@ class TestUsernameEndpoint:
 
 
 class TestAuthCallbackRoute:
-    def test_callback_serves_html(self) -> None:
+    def test_callback_returns_503_when_not_configured(self) -> None:
         with TestClient(app=app) as client:
-            resp = client.get("/auth/callback?code=abc&state=xyz")
-            assert resp.status_code == 200
-            assert "text/html" in resp.headers["content-type"]
-            assert "STICK FIGHTER" in resp.text
+            resp = client.get("/auth/callback?code=abc&state=xyz", follow_redirects=False)
+            assert resp.status_code == 503
+
+    def test_callback_redirects_on_error(self) -> None:
+        with TestClient(app=app) as client:
+            server.oidc_config = OIDCConfig(
+                issuer="https://id.example.com", client_id="test",
+                client_secret="", authorization_endpoint="https://id.example.com/authorize",
+                token_endpoint="https://id.example.com/token",
+                userinfo_endpoint="https://id.example.com/userinfo",
+            )
+            resp = client.get("/auth/callback?error=access_denied", follow_redirects=False)
+            assert resp.status_code == 302
+            assert resp.headers["location"] == "/"
+            server.oidc_config = None
 
 
 # ─── Multiplayer route ──────────────────────
