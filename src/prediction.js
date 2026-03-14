@@ -84,6 +84,13 @@ export class PredictionManager {
     this.game.roundTimer = snapshot.round_timer;
     if (snapshot.round_over) this.game.roundOver = true;
 
+    // Sync projectiles from server state
+    if (snapshot.projectiles) {
+      this.game.projectiles = snapshot.projectiles.map(p => ({
+        x: p.x, y: p.y, vx: p.vx, owner: p.owner, active: p.active, animTimer: 0,
+      }));
+    }
+
     // Check if rollback is needed
     if (this._needsRollback(snapshot)) {
       this._rollbackAndReplay(snapshot, confirmedSeq);

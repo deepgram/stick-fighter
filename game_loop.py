@@ -85,6 +85,7 @@ def _serialize_fighter(f: Any) -> dict[str, Any]:
         "jump_count": f.jump_count,
         "flip_count": f.flip_count,
         "grounded": f.grounded,
+        "hadouken_cooldown": round(f.hadouken_cooldown, 3),
         "events": list(f.events),
     }
 
@@ -100,6 +101,10 @@ def _build_snapshot(room: RoomLoop) -> dict[str, Any]:
         "round_over": room.engine.round_over,
         "p1": _serialize_fighter(room.engine.p1),
         "p2": _serialize_fighter(room.engine.p2),
+        "projectiles": [
+            {"x": p.x, "y": p.y, "vx": p.vx, "owner": p.owner, "active": p.active}
+            for p in room.engine.projectiles if p.active
+        ],
         "p1_input_seq": p1_seq,
         "p2_input_seq": p2_seq,
     }
