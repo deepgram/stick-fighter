@@ -101,3 +101,105 @@ describe('LLMAdapter character support', () => {
     expect(callBody.provider).toBe('openai');
   });
 });
+
+describe('LLMAdapter retry and fallback', () => {
+  /** Helper: create an adapter with a mock game ref */
+  function createTestAdapter() {
+    const adapter = new LLMAdapter(2, 'anthropic', 'haiku');
+    adapter._running = true;
+    adapter._ready = true;
+    adapter.game = {
+      p1: { x: 100, y: 0, health: 200, state: 'idle', grounded: true },
+      p2: { x: 300, y: 0, health: 200, state: 'idle', grounded: true },
+      roundOver: false,
+      waitingForProviders: false,
+      fightAlert: 0,
+      roundTimer: 60,
+      p2LlmToast: null,
+    };
+    return adapter;
+  }
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    global.fetch.mockReset();
+  });
+
+  test('uses plan from server on success', async () => {
+    global.fetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({ plan: ['forward', 'light punch', 'back', 'heavy kick', 'jump'] }),
+    });
+
+    const adapter = createTestAdapter();
+    await adapter._requestPlan();
+
+    expect(adapter._plan).toEqual(['forward', 'light punch', 'back', 'heavy kick', 'jump']);
+    expect(adapter._consecutiveFailures).toBe(0);
+    expect(adapter.game.p2LlmToast).toBeNull();
+  });
+
+  test('sets toast when server returns fallback flag', async () => {
+    global.fetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({ plan: ['forward', 'back', 'light punch', 'jump', 'crouch'], fallback: true }),
+    });
+
+    const adapter = createTestAdapter();
+    await adapter._requestPlan();
+
+    expect(adapter._plan).toEqual(['forward', 'back', 'light punch', 'jump', 'crouch']);
+    expect(adapter._consecutiveFailures).toBe(1);
+    expect(adapter.game.p2LlmToast).not.toBeNull();
+    expect(adapter.game.p2LlmToast.text).toBe('AI connection lost');
+  });
+
+  test('generates fallback plan on network error', async () => {
+    global.fetch.mockRejectedValue(new Error('Network error'));
+
+    const adapter = createTestAdapter();
+    await adapter._requestPlan();
+
+    // Should have a plan (randomly generated)
+    expect(adapter._plan.length).toBe(5);
+    expect(adapter._consecutiveFailures).toBe(1);
+    expect(adapter.game.p2LlmToast.text).toBe('AI connection lost');
+  });
+
+  test('generates fallback plan on HTTP error', async () => {
+    global.fetch.mockResolvedValue({ ok: false, status: 502 });
+
+    const adapter = createTestAdapter();
+    await adapter._requestPlan();
+
+    expect(adapter._plan.length).toBe(5);
+    expect(adapter._consecutiveFailures).toBe(1);
+  });
+
+  test('clears toast on successful request after failure', async () => {
+    // First: fail
+    global.fetch.mockRejectedValueOnce(new Error('timeout'));
+
+    const adapter = createTestAdapter();
+    await adapter._requestPlan();
+    expect(adapter._consecutiveFailures).toBe(1);
+    expect(adapter.game.p2LlmToast).not.toBeNull();
+
+    // Second: succeed
+    global.fetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ plan: ['forward', 'light punch', 'back', 'jump', 'heavy kick'] }),
+    });
+
+    await adapter._requestPlan();
+    expect(adapter._consecutiveFailures).toBe(0);
+    expect(adapter.game.p2LlmToast).toBeNull();
+  });
+
+  test('_generateFallbackPlan returns 5 commands', () => {
+    const adapter = createTestAdapter();
+    const plan = adapter._generateFallbackPlan();
+    expect(plan).toHaveLength(5);
+    plan.forEach(cmd => expect(typeof cmd).toBe('string'));
+  });
+});

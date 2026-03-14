@@ -109,6 +109,10 @@ export class Game {
 
     // Prediction manager — set by multiplayer code (null for single player)
     this.predictionManager = null;
+
+    // LLM toast — set by LLMAdapter when AI is unavailable
+    this.p1LlmToast = null; // { text, time }
+    this.p2LlmToast = null;
   }
 
   /** Logical (CSS pixel) dimensions */
@@ -249,6 +253,16 @@ export class Game {
       e.time -= dt;
       return e.time > 0;
     });
+
+    // Tick down LLM toast timers
+    if (this.p1LlmToast) {
+      this.p1LlmToast.time -= dt;
+      if (this.p1LlmToast.time <= 0) this.p1LlmToast = null;
+    }
+    if (this.p2LlmToast) {
+      this.p2LlmToast.time -= dt;
+      if (this.p2LlmToast.time <= 0) this.p2LlmToast = null;
+    }
 
     if (this.p1.health <= 0 || this.p2.health <= 0) {
       this.roundOver = true;
@@ -561,6 +575,10 @@ Distance: ${Math.round(dist)}px | Timer: ${Math.ceil(this.roundTimer)}s`;
     // Phone number display — shown until call connects
     this._drawPhoneInfo(ctx, w, h);
 
+    // LLM toast indicators
+    this._drawLlmToast(ctx, this.p1LlmToast, 30 + 85, this.floorY + 16, DG.primary);
+    this._drawLlmToast(ctx, this.p2LlmToast, w - 200 + 85, this.floorY + 16, DG.secondary);
+
     // "Waiting..." overlay
     if (this.waitingForProviders) {
       ctx.save();
@@ -831,6 +849,18 @@ Distance: ${Math.round(dist)}px | Timer: ${Math.ceil(this.roundTimer)}s`;
   // ─────────────────────────────────────────
   // Phone number HUD — shown until call connects
   // ─────────────────────────────────────────
+  _drawLlmToast(ctx, toast, cx, y, color) {
+    if (!toast) return;
+    ctx.save();
+    const alpha = Math.min(1, toast.time / 0.5); // fade out in last 0.5s
+    ctx.globalAlpha = alpha * 0.85;
+    ctx.font = 'bold 10px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillStyle = color;
+    ctx.fillText(toast.text, cx, y);
+    ctx.restore();
+  }
+
   _drawPhoneInfo(ctx, w, h) {
     const infos = [
       { info: this.p1PhoneInfo, color: DG.primary, label: 'P1', x: w * 0.25 },

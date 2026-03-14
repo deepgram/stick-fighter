@@ -447,3 +447,111 @@ class TestDistinctPersonalities:
         assert new_char.id == "test"
         assert new_char.temperature == 0.5
         assert new_char.personality_prompt.startswith("\n\nPERSONALITY:")
+
+
+# ─────────────────────────────────────────────
+# LLM command endpoint: retry & fallback
+# ─────────────────────────────────────────────
+
+
+class TestLLMCommandRetryAndFallback:
+    """Verify the endpoint retries once then falls back to random commands."""
+
+    @pytest.fixture(autouse=True)
+    def _set_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+
+    @patch("server._llm_anthropic", new_callable=AsyncMock)
+    def test_returns_valid_plan_on_success(
+        self, mock_anthropic: AsyncMock
+    ) -> None:
+        mock_anthropic.return_value = '["forward", "light punch", "back", "heavy kick", "dash forward"]'
+
+        with TestClient(app=app) as client:
+            resp = client.post(
+                "/api/llm/command",
+                content=json.dumps({
+                    "provider": "anthropic",
+                    "messages": [{"role": "user", "content": "T99 | ME:200,0 hp200 idle | OPP:400,0 hp200 idle | D200"}],
+                }),
+                headers={"Content-Type": "application/json"},
+            )
+            assert resp.status_code == 201
+            data = resp.json()
+            assert "plan" in data
+            assert isinstance(data["plan"], list)
+            assert len(data["plan"]) == 5
+            assert "fallback" not in data
+            mock_anthropic.assert_called_once()
+
+    @patch("server._llm_anthropic", new_callable=AsyncMock)
+    def test_retries_once_on_first_failure(
+        self, mock_anthropic: AsyncMock
+    ) -> None:
+        """First call fails, second succeeds — should retry and return LLM plan."""
+        mock_anthropic.side_effect = [
+            Exception("timeout"),
+            '["forward", "light punch", "back", "heavy kick", "jump"]',
+        ]
+
+        with TestClient(app=app) as client:
+            resp = client.post(
+                "/api/llm/command",
+                content=json.dumps({
+                    "provider": "anthropic",
+                    "messages": [{"role": "user", "content": "test state"}],
+                }),
+                headers={"Content-Type": "application/json"},
+            )
+            assert resp.status_code == 201
+            data = resp.json()
+            assert "plan" in data
+            assert len(data["plan"]) == 5
+            assert "fallback" not in data
+            assert mock_anthropic.call_count == 2
+
+    @patch("server._llm_anthropic", new_callable=AsyncMock)
+    def test_falls_back_to_random_after_two_failures(
+        self, mock_anthropic: AsyncMock
+    ) -> None:
+        """Both attempts fail — should return random fallback plan."""
+        mock_anthropic.side_effect = Exception("API down")
+
+        with TestClient(app=app) as client:
+            resp = client.post(
+                "/api/llm/command",
+                content=json.dumps({
+                    "provider": "anthropic",
+                    "messages": [{"role": "user", "content": "test state"}],
+                }),
+                headers={"Content-Type": "application/json"},
+            )
+            assert resp.status_code == 201
+            data = resp.json()
+            assert "plan" in data
+            assert isinstance(data["plan"], list)
+            assert len(data["plan"]) == 5
+            assert data.get("fallback") is True
+            assert mock_anthropic.call_count == 2
+
+    @patch("server._llm_openai", new_callable=AsyncMock)
+    def test_openai_fallback_on_failure(
+        self, mock_openai: AsyncMock
+    ) -> None:
+        """OpenAI provider also falls back on double failure."""
+        mock_openai.side_effect = Exception("rate limited")
+
+        with TestClient(app=app) as client:
+            resp = client.post(
+                "/api/llm/command",
+                content=json.dumps({
+                    "provider": "openai",
+                    "messages": [{"role": "user", "content": "test state"}],
+                }),
+                headers={"Content-Type": "application/json"},
+            )
+            assert resp.status_code == 201
+            data = resp.json()
+            assert data.get("fallback") is True
+            assert len(data["plan"]) == 5

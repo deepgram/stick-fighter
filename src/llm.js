@@ -10,6 +10,19 @@ import { CommandAdapter } from './input.js';
 const MAX_HISTORY = 10;       // max messages in conversation
 const MOVE_INTERVAL = 1000;   // ms between executing each move from the plan
 
+// Commands used for random fallback when LLM is unavailable
+const FALLBACK_COMMANDS = [
+  'forward', 'forward', 'forward', 'forward',
+  'back', 'back',
+  'dash forward', 'dash back',
+  'crouch',
+  'jump',
+  'light punch', 'light kick',
+  'medium punch', 'medium kick',
+  'heavy punch', 'heavy kick',
+  'forward light punch', 'forward light kick',
+];
+
 export class LLMAdapter {
   constructor(player, provider = 'anthropic', character = null) {
     this.player = player;
@@ -37,6 +50,9 @@ export class LLMAdapter {
     // Tactic tracking: command → { dealt, taken, uses }
     this._tactics = {};
     this._lastCommand = null;
+
+    // LLM availability tracking
+    this._consecutiveFailures = 0;
   }
 
   setGameRef(game) {
@@ -133,7 +149,39 @@ export class LLMAdapter {
     this._lastPlanTaken += taken;
   }
 
-  /** Request a fresh 5-move plan from the LLM */
+  /** Generate a random 5-move plan (fallback when LLM is unavailable) */
+  _generateFallbackPlan() {
+    const plan = [];
+    for (let i = 0; i < 5; i++) {
+      plan.push(FALLBACK_COMMANDS[Math.floor(Math.random() * FALLBACK_COMMANDS.length)]);
+    }
+    return plan;
+  }
+
+  /** Set the LLM toast message on the game object */
+  _setToast(text) {
+    if (!this.game) return;
+    const key = this.player === 1 ? 'p1LlmToast' : 'p2LlmToast';
+    this.game[key] = text ? { text, time: 2.0 } : null;
+  }
+
+  /** Apply a plan (from LLM or fallback) */
+  _applyPlan(plan, elapsed = 0, isFallback = false) {
+    if (plan && plan.length > 0) {
+      const src = isFallback ? 'fallback' : 'LLM';
+      console.log(`[LLM P${this.player}] new ${src} plan (${Math.round(elapsed)}ms): ${JSON.stringify(plan)}`);
+      if (!isFallback) {
+        this._messages.push({ role: 'assistant', content: JSON.stringify(plan) });
+      }
+      this._plan = plan;
+      this._planIndex = 0;
+      this._moveTimer = MOVE_INTERVAL; // execute first move immediately
+      this._lastPlanDealt = 0;
+      this._lastPlanTaken = 0;
+    }
+  }
+
+  /** Request a fresh 5-move plan from the LLM (retry once, then fallback) */
   async _requestPlan() {
     if (this._requesting || !this._running) return;
     this._requesting = true;
@@ -154,6 +202,7 @@ export class LLMAdapter {
       const t0 = performance.now();
       const body = { provider: this.provider, messages: this._messages };
       if (this.character) body.character = this.character;
+
       const resp = await fetch('/api/llm/command', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -162,29 +211,34 @@ export class LLMAdapter {
       const elapsed = performance.now() - t0;
 
       if (!resp.ok) {
-        console.error(`[LLM P${this.player}] API error: ${resp.status}`);
-        await _sleep(1000);
-        this._requesting = false;
-        return;
+        throw new Error(`HTTP ${resp.status}`);
       }
 
       const data = await resp.json();
       console.log(`[LLM P${this.player}] response:`, JSON.stringify(data));
-      const plan = data.plan;
-      if (plan && plan.length > 0) {
-        console.log(`[LLM P${this.player}] new plan (${Math.round(elapsed)}ms): ${JSON.stringify(plan)}`);
-        this._messages.push({ role: 'assistant', content: JSON.stringify(plan) });
-        this._plan = plan;
-        this._planIndex = 0;
-        this._moveTimer = MOVE_INTERVAL; // execute first move immediately
-        this._lastPlanDealt = 0;
-        this._lastPlanTaken = 0;
+
+      // Server may have fallen back to random commands
+      if (data.fallback) {
+        this._consecutiveFailures++;
+        this._setToast('AI connection lost');
+        console.warn(`[LLM P${this.player}] server returned fallback plan`);
       } else {
+        this._consecutiveFailures = 0;
+        this._setToast(null);
+      }
+
+      this._applyPlan(data.plan, elapsed, !!data.fallback);
+
+      if (!data.plan || data.plan.length === 0) {
         console.warn(`[LLM P${this.player}] empty/missing plan in response:`, data);
       }
     } catch (e) {
-      console.error(`[LLM P${this.player}] Error:`, e);
-      await _sleep(1000);
+      // Network error or server unreachable — use client-side fallback
+      this._consecutiveFailures++;
+      console.error(`[LLM P${this.player}] Error (failures: ${this._consecutiveFailures}):`, e);
+      this._setToast('AI connection lost');
+      const plan = this._generateFallbackPlan();
+      this._applyPlan(plan, 0, true);
     } finally {
       this._requesting = false;
     }
@@ -249,8 +303,4 @@ export class LLMAdapter {
   endFrame() {
     this.command.endFrame();
   }
-}
-
-function _sleep(ms) {
-  return new Promise(r => setTimeout(r, ms));
 }

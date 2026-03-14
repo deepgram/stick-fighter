@@ -3,10 +3,10 @@
   "sessionId": "e943ccda-cca9-492d-8e6d-a07660cc75be",
   "status": "running",
   "startedAt": "2026-03-14T11:01:24.391Z",
-  "updatedAt": "2026-03-14T11:04:19.310Z",
-  "currentIteration": 0,
+  "updatedAt": "2026-03-14T11:14:04.959Z",
+  "currentIteration": 1,
   "maxIterations": 0,
-  "tasksCompleted": 0,
+  "tasksCompleted": 1,
   "isPaused": false,
   "agentPlugin": "claude",
   "trackerState": {
@@ -17,8 +17,8 @@
       {
         "id": "stick-fighter-j3r.2",
         "title": "US-002: Fix room share URL domain",
-        "status": "open",
-        "completedInSession": false
+        "status": "completed",
+        "completedInSession": true
       },
       {
         "id": "stick-fighter-j3r.1",
@@ -70,7 +70,18 @@
       }
     ]
   },
-  "iterations": [],
+  "iterations": [
+    {
+      "iteration": 1,
+      "status": "completed",
+      "taskId": "stick-fighter-j3r.2",
+      "taskTitle": "US-002: Fix room share URL domain",
+      "taskCompleted": true,
+      "durationMs": 163750,
+      "startedAt": "2026-03-14T11:01:35.440Z",
+      "endedAt": "2026-03-14T11:04:19.190Z"
+    }
+  ],
   "skippedTaskIds": [],
   "cwd": "/Users/lukeoliff/Projects/deepgram/stick-fighter",
   "activeTaskIds": [],

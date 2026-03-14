@@ -326,9 +326,59 @@ async def list_characters() -> list[dict[str, str]]:
     ]
 
 
+FALLBACK_COMMANDS: list[str] = [
+    "forward", "forward", "forward", "forward",
+    "back", "back",
+    "dash forward", "dash back",
+    "crouch",
+    "jump",
+    "light punch", "light kick",
+    "medium punch", "medium kick",
+    "heavy punch", "heavy kick",
+    "forward light punch", "forward light kick",
+]
+
+
+def _generate_random_plan(size: int = 5) -> list[str]:
+    """Generate a random plan of fight commands (used as LLM fallback)."""
+    return [random.choice(FALLBACK_COMMANDS) for _ in range(size)]
+
+
+async def _call_llm_provider(
+    provider: str,
+    messages: list[dict],
+    system_prompt: str,
+    temperature: float | None,
+) -> str:
+    """Call the appropriate LLM provider. Raises on failure."""
+    if provider == "openai":
+        return await _llm_openai(messages, system_prompt, temperature=temperature)
+    return await _llm_anthropic(messages, system_prompt, temperature=temperature)
+
+
+def _parse_llm_plan(raw: str, provider: str) -> list[str]:
+    """Parse raw LLM response text into a list of normalized move strings."""
+    try:
+        clean = raw
+        if clean.startswith("```"):
+            clean = clean.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+        plan = json.loads(clean)
+        if not isinstance(plan, list):
+            plan = [str(plan)]
+        return [str(m).strip().strip('"\'').lower().strip('.') for m in plan if m]
+    except (json.JSONDecodeError, ValueError):
+        command = raw.strip('"\'').lower().strip('.')
+        plan = [command] if command else ["forward"]
+        print(f"[llm-fighter:{provider}] JSON parse failed, fallback: {plan}")
+        return plan
+
+
 @post("/api/llm/command")
 async def llm_command(data: dict[str, Any]) -> dict:
-    """Send game state to LLM, return a 5-move plan. Supports multiple providers."""
+    """Send game state to LLM, return a 5-move plan.
+
+    Retry once on failure; if both attempts fail, return a random plan.
+    """
     provider = data.get("provider", "anthropic")
     messages = data.get("messages", [])
     character_id = data.get("character")
@@ -355,34 +405,26 @@ async def llm_command(data: dict[str, Any]) -> dict:
     if len(messages) > 4:
         print(f"[llm-fighter:{provider}]   ... ({len(messages) - 4} earlier messages omitted)")
 
-    if provider == "openai":
-        text = await _llm_openai(messages, system_prompt, temperature=temperature)
-    else:
-        text = await _llm_anthropic(messages, system_prompt, temperature=temperature)
+    # Try up to 2 times (initial + 1 retry), then fall back to random
+    last_error: str = ""
+    for attempt in range(2):
+        try:
+            text = await _call_llm_provider(provider, messages, system_prompt, temperature)
+            raw = text.strip()
+            print(f"[llm-fighter:{provider}] raw: \"{raw}\"")
+            plan = _parse_llm_plan(raw, provider)
+            print(f"[llm-fighter:{provider}] plan: {plan}")
+            print(f"[llm-fighter:{provider}] ──────────────")
+            return {"plan": plan}
+        except Exception as exc:
+            last_error = str(exc)
+            label = "retry" if attempt == 0 else "giving up"
+            print(f"[llm-fighter:{provider}] attempt {attempt + 1} failed ({label}): {last_error}")
 
-    # Parse JSON array of moves
-    raw = text.strip()
-    print(f"[llm-fighter:{provider}] raw: \"{raw}\"")
-
-    try:
-        # Strip markdown code fences if present
-        clean = raw
-        if clean.startswith("```"):
-            clean = clean.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
-        plan = json.loads(clean)
-        if not isinstance(plan, list):
-            plan = [str(plan)]
-        # Normalize: lowercase, strip quotes/punctuation
-        plan = [str(m).strip().strip('"\'').lower().strip('.') for m in plan if m]
-    except (json.JSONDecodeError, ValueError):
-        # Fallback: treat as single command (backward compat)
-        command = raw.strip('"\'').lower().strip('.')
-        plan = [command] if command else ["forward"]
-        print(f"[llm-fighter:{provider}] JSON parse failed, fallback: {plan}")
-
-    print(f"[llm-fighter:{provider}] plan: {plan}")
-    print(f"[llm-fighter:{provider}] ──────────────")
-    return {"plan": plan}
+    # Both attempts failed — return random plan
+    plan = _generate_random_plan()
+    print(f"[llm-fighter:{provider}] ─── FALLBACK (random) ─── {plan}")
+    return {"plan": plan, "fallback": True}
 
 
 async def _llm_anthropic(
@@ -404,7 +446,7 @@ async def _llm_anthropic(
     if temperature is not None:
         body["temperature"] = temperature
 
-    async with httpx.AsyncClient(timeout=10) as client:
+    async with httpx.AsyncClient(timeout=3) as client:
         resp = await client.post(
             ANTHROPIC_URL,
             headers={
@@ -454,7 +496,7 @@ async def _llm_openai(
     if temperature is not None:
         body["temperature"] = temperature
 
-    async with httpx.AsyncClient(timeout=10) as client:
+    async with httpx.AsyncClient(timeout=3) as client:
         resp = await client.post(
             OPENAI_URL,
             headers={
