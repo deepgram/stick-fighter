@@ -271,3 +271,28 @@ after each iteration and it's included in prompts for context.
   - All quality gates: 493 Python tests, ruff, mypy, 163 JS tests pass
 ---
 
+## 2026-03-14 - stick-fighter-j3r.9
+- Added full keyboard navigation to all menu screens (US-007)
+- Landing page: Up/Down arrows cycle focus between Multiplayer / Single Player / Leaderboard; Enter activates
+- Multiplayer menu: Up/Down arrows cycle between Create Room / Join Room / Matchmaking; Enter activates
+- Room controller: Up/Down cycles mode pills (skips mpDisabled modes); Enter confirms
+- Matchmaking controller: Up/Down cycles mode pills (skips mpDisabled); Enter searches
+- Leaderboard: Left/Right switches between Voice League / Keyboard League tabs
+- Character select: Arrow keys select characters; Enter fights
+- Match results: Left/Right between Rematch / Leave; Enter activates
+- Room code input: auto-focused when join room screen opens
+- Visible `.kb-focus` CSS class applied via arrow key navigation; cleared on mousedown
+- Escape already handled for all screens (no changes needed)
+- Focus indices reset on screen transitions via `showScreen()`
+- Files changed:
+  - `index.html` — Added `.kb-focus` CSS class (outline + offset)
+  - `src/main.js` — Added focus tracking variables, `updateFocus()` / `clearKbFocus()` helpers, mousedown listener, extended keydown handler with cases for all screens, auto-focus in `showScreen()`
+  - `tests/keyboard-nav.test.js` — New file (26 tests: HTML structure, focus cycling, skip logic, CSS indicator)
+- **Learnings:**
+  - The existing `state` variable + `else if` chain in the keydown handler is a clean pattern for screen-specific keyboard nav — no need for a separate MenuNavigator class
+  - Controller selection pill navigation reuses the exact `do...while` skip pattern from onboarding's P2 mode cycling — consistent across all 3 controller selection contexts (onboarding, room, matchmaking)
+  - Regex matching in tests against `class="lb-filter"` can accidentally match CSS rules too — use `<button\s+class=` prefix to match only elements
+  - `showScreen()` is the right place to reset focus indices and auto-focus inputs — centralizes initialization
+  - All quality gates: 493 Python tests, ruff, mypy, 189 JS tests pass
+---
+

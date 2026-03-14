@@ -85,6 +85,20 @@ function showScreen(name) {
     screens[name].classList.remove('hidden');
   }
   state = name;
+
+  // Clear keyboard focus indicators from previous screen
+  document.querySelectorAll('.kb-focus').forEach(el => el.classList.remove('kb-focus'));
+
+  // Reset focus indices for the new screen
+  if (name === 'landing') landingFocusIdx = 0;
+  if (name === 'multiplayer') mpFocusIdx = 0;
+  if (name === 'matchResults') resultsFocusIdx = 0;
+
+  // Auto-focus room code input when entering join screen
+  if (name === 'joinRoom') {
+    const input = document.getElementById('room-code-input');
+    if (input) input.focus();
+  }
 }
 
 /** Create an InputManager with the right adapter for a mode */
@@ -1505,6 +1519,51 @@ screens.onboarding.addEventListener('click', e => {
 });
 
 // ─────────────────────────────────────────────
+// Keyboard navigation — per-screen focus tracking
+// ─────────────────────────────────────────────
+let landingFocusIdx = 0;
+let mpFocusIdx = 0;
+let resultsFocusIdx = 0;
+
+function getLandingItems() {
+  return [
+    document.getElementById('btn-multiplayer'),
+    document.getElementById('btn-singleplayer'),
+    document.getElementById('btn-leaderboard'),
+  ];
+}
+
+function getMpItems() {
+  return [
+    document.getElementById('btn-create-room'),
+    document.getElementById('btn-join-room'),
+    document.getElementById('btn-matchmaking'),
+  ];
+}
+
+function getResultsItems() {
+  return [
+    document.getElementById('btn-rematch'),
+    document.getElementById('btn-leave'),
+  ];
+}
+
+/** Apply .kb-focus to exactly one element in a list, removing from siblings */
+function updateFocus(items, idx) {
+  items.forEach((el, i) => {
+    if (el) el.classList.toggle('kb-focus', i === idx);
+  });
+}
+
+/** Clear all keyboard focus indicators on the page */
+function clearKbFocus() {
+  document.querySelectorAll('.kb-focus').forEach(el => el.classList.remove('kb-focus'));
+}
+
+// Clear keyboard focus indicators on mouse interaction
+document.addEventListener('mousedown', clearKbFocus);
+
+// ─────────────────────────────────────────────
 // Keyboard handlers
 // ─────────────────────────────────────────────
 window.addEventListener('keydown', e => {
@@ -1550,6 +1609,97 @@ window.addEventListener('keydown', e => {
         // Classic single-player: Enter restarts
         showOnboarding();
       }
+    }
+  } else if (state === 'landing') {
+    // Landing: Up/Down between MP / SP / Leaderboard; Enter selects
+    const items = getLandingItems();
+    if (e.code === 'ArrowDown' || e.code === 'ArrowUp') {
+      e.preventDefault();
+      landingFocusIdx = e.code === 'ArrowDown'
+        ? (landingFocusIdx + 1) % items.length
+        : (landingFocusIdx - 1 + items.length) % items.length;
+      updateFocus(items, landingFocusIdx);
+    } else if (e.code === 'Enter') {
+      const focused = items[landingFocusIdx];
+      if (focused) focused.click();
+    }
+  } else if (state === 'multiplayer') {
+    // Multiplayer menu: Up/Down between Create/Join/Matchmaking; Enter selects
+    const items = getMpItems();
+    if (e.code === 'ArrowDown' || e.code === 'ArrowUp') {
+      e.preventDefault();
+      mpFocusIdx = e.code === 'ArrowDown'
+        ? (mpFocusIdx + 1) % items.length
+        : (mpFocusIdx - 1 + items.length) % items.length;
+      updateFocus(items, mpFocusIdx);
+    } else if (e.code === 'Enter') {
+      items[mpFocusIdx]?.click();
+    }
+  } else if (state === 'roomController') {
+    // Room controller: Up/Down cycles mode pills (skip mpDisabled); Enter confirms
+    if (e.code === 'ArrowDown' || e.code === 'ArrowUp') {
+      e.preventDefault();
+      const dir = e.code === 'ArrowDown' ? 1 : -1;
+      let next = roomModeIdx;
+      do { next = (next + dir + modeCount) % modeCount; } while (INPUT_MODES[next].mpDisabled);
+      roomModeIdx = next;
+      updateRoomControllerUI();
+    } else if (e.code === 'Enter') {
+      const confirmBtn = document.getElementById('btn-ctrl-confirm');
+      if (confirmBtn && !confirmBtn.disabled) confirmBtn.click();
+    }
+  } else if (state === 'matchmaking') {
+    // Matchmaking controller select: Up/Down cycles pills; Enter searches
+    const mmSelect = document.getElementById('mm-select');
+    if (mmSelect && !mmSelect.classList.contains('hidden')) {
+      if (e.code === 'ArrowDown' || e.code === 'ArrowUp') {
+        e.preventDefault();
+        const dir = e.code === 'ArrowDown' ? 1 : -1;
+        let next = mmModeIdx;
+        do { next = (next + dir + modeCount) % modeCount; } while (INPUT_MODES[next].mpDisabled);
+        mmModeIdx = next;
+        updateMatchmakingControllerUI();
+      } else if (e.code === 'Enter') {
+        const searchBtn = document.getElementById('btn-mm-search');
+        if (searchBtn && !searchBtn.disabled) searchBtn.click();
+      }
+    }
+  } else if (state === 'leaderboard') {
+    // Leaderboard: Left/Right switches league tabs
+    if (e.code === 'ArrowLeft' || e.code === 'ArrowRight') {
+      e.preventDefault();
+      const tabs = ['voice', 'keyboard'];
+      const currentIdx = tabs.indexOf(lbCategory);
+      const newIdx = e.code === 'ArrowRight'
+        ? (currentIdx + 1) % tabs.length
+        : (currentIdx - 1 + tabs.length) % tabs.length;
+      loadLeaderboard(tabs[newIdx]);
+    }
+  } else if (state === 'characterSelect') {
+    // Character select: Up/Down (or Left/Right) between characters; Enter fights
+    const cards = Array.from(document.querySelectorAll('#char-cards .char-card'));
+    if (cards.length > 0) {
+      if (e.code === 'ArrowLeft' || e.code === 'ArrowRight' || e.code === 'ArrowUp' || e.code === 'ArrowDown') {
+        e.preventDefault();
+        const dir = (e.code === 'ArrowRight' || e.code === 'ArrowDown') ? 1 : -1;
+        const currentIdx = cards.findIndex(c => c.classList.contains('selected'));
+        const nextIdx = currentIdx < 0 ? 0 : (currentIdx + dir + cards.length) % cards.length;
+        cards[nextIdx]?.click();
+      } else if (e.code === 'Enter') {
+        if (selectedCharacter) {
+          document.getElementById('btn-char-fight')?.click();
+        }
+      }
+    }
+  } else if (state === 'matchResults') {
+    // Match results: Left/Right between Rematch/Leave; Enter selects
+    const items = getResultsItems();
+    if (e.code === 'ArrowLeft' || e.code === 'ArrowRight') {
+      e.preventDefault();
+      resultsFocusIdx = e.code === 'ArrowRight' ? 1 : 0;
+      updateFocus(items, resultsFocusIdx);
+    } else if (e.code === 'Enter') {
+      items[resultsFocusIdx]?.click();
     }
   }
 

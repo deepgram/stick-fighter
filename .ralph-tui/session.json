@@ -3,10 +3,10 @@
   "sessionId": "e943ccda-cca9-492d-8e6d-a07660cc75be",
   "status": "running",
   "startedAt": "2026-03-14T11:01:24.391Z",
-  "updatedAt": "2026-03-14T12:37:00.390Z",
-  "currentIteration": 11,
+  "updatedAt": "2026-03-14T12:43:31.656Z",
+  "currentIteration": 12,
   "maxIterations": 0,
-  "tasksCompleted": 11,
+  "tasksCompleted": 12,
   "isPaused": false,
   "agentPlugin": "claude",
   "trackerState": {
@@ -65,8 +65,8 @@
       {
         "id": "stick-fighter-j3r.7",
         "title": "US-005: Add step indicators and instructions to all screens",
-        "status": "open",
-        "completedInSession": false
+        "status": "completed",
+        "completedInSession": true
       }
     ]
   },
@@ -180,6 +180,16 @@
       "durationMs": 327435,
       "startedAt": "2026-03-14T12:25:24.118Z",
       "endedAt": "2026-03-14T12:30:51.553Z"
+    },
+    {
+      "iteration": 12,
+      "status": "completed",
+      "taskId": "stick-fighter-j3r.7",
+      "taskTitle": "US-005: Add step indicators and instructions to all screens",
+      "taskCompleted": true,
+      "durationMs": 366905,
+      "startedAt": "2026-03-14T12:30:53.312Z",
+      "endedAt": "2026-03-14T12:37:00.217Z"
     }
   ],
   "skippedTaskIds": [],
