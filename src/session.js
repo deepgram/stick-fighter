@@ -46,11 +46,18 @@ export class Session {
         }
       };
 
-      this.eventSource.onerror = (e) => {
+      this.eventSource.onerror = () => {
         if (!this.connected) {
           reject(new Error('SSE connection failed'));
+          return;
         }
-        console.error('[Session] SSE error');
+        // Connection lost after initial connect — mark as disconnected
+        console.warn('[Session] SSE connection lost');
+        this.connected = false;
+        if (this.eventSource) {
+          this.eventSource.close();
+          this.eventSource = null;
+        }
       };
     });
   }
@@ -66,15 +73,25 @@ export class Session {
 
   /** Send data to the backend (BiDi: client→server) */
   async send(data) {
-    if (!this.sessionId) throw new Error('Not connected');
+    if (!this.sessionId || !this.connected) return;
 
     const isAudio = data instanceof ArrayBuffer || data instanceof Uint8Array;
 
-    await fetch(`/api/session/send?session=${this.sessionId}`, {
-      method: 'POST',
-      headers: isAudio ? {} : { 'Content-Type': 'application/json' },
-      body: isAudio ? data : JSON.stringify(data),
-    });
+    try {
+      const resp = await fetch(`/api/session/send?session=${this.sessionId}`, {
+        method: 'POST',
+        headers: isAudio ? {} : { 'Content-Type': 'application/json' },
+        body: isAudio ? data : JSON.stringify(data),
+      });
+      if (!resp.ok && resp.status === 404) {
+        // Session expired server-side — mark as disconnected
+        console.warn('[Session] Session expired, disconnecting');
+        this.connected = false;
+      }
+    } catch {
+      // Network error (502, connection refused, etc.) — silently ignore
+      // The SSE onerror handler will detect the disconnect
+    }
   }
 
   /** Close the session */

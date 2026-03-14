@@ -50,7 +50,15 @@ export class SimulatedAdapter {
   }
 
   _sendGameState() {
-    if (!this.session?.connected || !this.game || this.game.roundOver) return;
+    if (!this.session?.connected || !this.game || this.game.roundOver) {
+      // Stop polling if session died
+      if (this.session && !this.session.connected && this._pollTimer) {
+        clearInterval(this._pollTimer);
+        this._pollTimer = null;
+        console.warn('[Sim] Session disconnected, stopped polling');
+      }
+      return;
+    }
 
     const fighter = this.player === 1 ? this.game.p1 : this.game.p2;
     const opponent = this.player === 1 ? this.game.p2 : this.game.p1;
