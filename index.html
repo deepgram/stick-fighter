@@ -249,6 +249,12 @@
     }
     .landing.hidden { display: none; }
 
+    .landing-tagline {
+      font-size: 13px;
+      color: var(--dg-slate);
+      margin-top: -12px;
+    }
+
     .path-cards {
       display: flex;
       gap: 24px;
@@ -298,6 +304,12 @@
       padding: 20px;
     }
     .multiplayer-menu.hidden { display: none; }
+
+    .mp-steps {
+      font-size: 11px;
+      color: var(--dg-pebble);
+      letter-spacing: 0.5px;
+    }
 
     .mp-options {
       display: flex;
@@ -919,6 +931,7 @@
   <!-- Landing screen — mode selection -->
   <div class="landing" id="landing">
     <h2>SELECT MODE</h2>
+    <p class="landing-tagline">Fight online or train against AI</p>
     <div class="path-cards">
       <button class="path-card mp" id="btn-multiplayer">
         <h3>MULTIPLAYER</h3>
@@ -937,6 +950,7 @@
   <!-- Multiplayer menu -->
   <div class="multiplayer-menu hidden" id="multiplayer-menu">
     <h2>MULTIPLAYER</h2>
+    <p class="mp-steps">Step 1: Create or Join &rarr; Step 2: Pick Controller &rarr; Step 3: Fight!</p>
     <div class="mp-options">
       <button class="mp-option" id="btn-create-room">
         <span class="mp-icon">＋</span>
@@ -968,7 +982,7 @@
     <h2>JOIN ROOM</h2>
     <p class="join-hint">Enter the 3-word room code</p>
     <input type="text" class="room-code-input" id="room-code-input"
-      placeholder="red-tiger-paw" autocomplete="off" spellcheck="false">
+      placeholder="e.g. red-tiger-paw" autocomplete="off" spellcheck="false">
     <button class="join-btn" id="btn-join-go" disabled>JOIN</button>
     <p class="join-error hidden" id="join-error"></p>
     <button class="back-btn" id="btn-join-back">← BACK</button>

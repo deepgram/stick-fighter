@@ -655,7 +655,7 @@ function startWaitingInArena(deadline) {
 
     ctx.font = '12px monospace';
     ctx.fillStyle = DG.slate || '#949498';
-    ctx.fillText('Waiting for opponent to pick a controller...', w / 2, 62);
+    ctx.fillText(`Waiting for opponent to pick a controller... (${remaining}s remaining)`, w / 2, 62);
 
     ctx.restore();
 
@@ -980,6 +980,8 @@ let mmProviderIdx = 0;
 let mmPlayerId = null;
 let mmPollTimer = null;
 let mmWaitingGame = false;
+let mmSearchStart = 0;
+let mmSearchTimer = null;
 
 /** Map controller id to ELO category (mirrors elo.py) */
 function controllerToCategory(controller) {
@@ -1092,10 +1094,12 @@ async function startMatchmakingSearch() {
     // Toggle to searching state
     document.getElementById('mm-select').classList.add('hidden');
     document.getElementById('mm-searching').classList.remove('hidden');
-    document.getElementById('mm-searching-text').textContent = 'Searching for opponent...';
+    mmSearchStart = Date.now();
+    document.getElementById('mm-searching-text').textContent = 'Searching for opponent... (0s)';
     document.getElementById('mm-wait-info').textContent =
       `Category: ${data.category} | ELO: ${Math.round(data.elo)} | Queue: ${data.queueSize}`;
 
+    startMmSearchTimer();
     startMatchmakingPoll();
   } catch (err) {
     console.error('[matchmaking] Error:', err);
@@ -1129,6 +1133,22 @@ function stopMatchmakingPoll() {
   }
 }
 
+function startMmSearchTimer() {
+  stopMmSearchTimer();
+  mmSearchTimer = setInterval(() => {
+    const elapsed = Math.floor((Date.now() - mmSearchStart) / 1000);
+    const textEl = document.getElementById('mm-searching-text');
+    if (textEl) textEl.textContent = `Searching for opponent... (${elapsed}s)`;
+  }, 1000);
+}
+
+function stopMmSearchTimer() {
+  if (mmSearchTimer) {
+    clearInterval(mmSearchTimer);
+    mmSearchTimer = null;
+  }
+}
+
 function handleMatchmakingStatus(data) {
   if (data.status === 'matched') {
     stopMatchmakingPoll();
@@ -1139,6 +1159,7 @@ function handleMatchmakingStatus(data) {
   } else if (data.status === 'not_queued') {
     // Player was removed (expired / pruned)
     stopMatchmakingPoll();
+    stopMmSearchTimer();
     mmPlayerId = null;
     if (mmWaitingGame) {
       if (game) { game.running = false; game = null; }
@@ -1150,6 +1171,7 @@ function handleMatchmakingStatus(data) {
 }
 
 async function handleMatchFound(data) {
+  stopMmSearchTimer();
   // If playing a waiting game, stop it first
   if (mmWaitingGame) {
     if (game) { game.running = false; game = null; }
@@ -1189,6 +1211,7 @@ document.getElementById('btn-mm-cancel').addEventListener('click', async () => {
     }).catch(() => {});
   }
   stopMatchmakingPoll();
+  stopMmSearchTimer();
   mmPlayerId = null;
   showMatchmakingScreen();
 });
@@ -1225,6 +1248,7 @@ document.getElementById('btn-mm-back').addEventListener('click', () => {
       body: JSON.stringify({ playerId: mmPlayerId }),
     }).catch(() => {});
     stopMatchmakingPoll();
+    stopMmSearchTimer();
     mmPlayerId = null;
   }
   showScreen('multiplayer');

@@ -250,3 +250,24 @@ after each iteration and it's included in prompts for context.
   - All quality gates: 493 Python tests, ruff, mypy, 150 JS tests pass
 ---
 
+## 2026-03-14 - stick-fighter-j3r.7
+- Added step indicators and instructions to all screens (US-005)
+- Landing page: "Fight online or train against AI" tagline below SELECT MODE heading
+- Multiplayer menu: "Step 1: Create or Join → Step 2: Pick Controller → Step 3: Fight!" step indicator
+- Room join: placeholder updated to "e.g. red-tiger-paw" (was "red-tiger-paw")
+- Room creation: already had "Share this code with your opponent" + COPY→COPIED feedback (no change needed)
+- Controller selection: updated INPUT_MODES desc fields to longer descriptive labels ("Keyboard — use arrow keys and Z/X", "Voice — speak commands into your mic", "Phone — call in from your phone")
+- Matchmaking queue: added live elapsed timer "Searching for opponent... (15s)" that ticks every second, with start/stop lifecycle tied to search state
+- Waiting for opponent: canvas text now includes remaining time "(45s remaining)" inline
+- Files changed:
+  - `index.html` — Added `.landing-tagline` element + CSS, `.mp-steps` element + CSS, updated placeholder to "e.g. red-tiger-paw"
+  - `src/ui.js` — Updated all INPUT_MODES `desc` fields to longer descriptive labels
+  - `src/main.js` — Added `mmSearchStart`, `mmSearchTimer`, `startMmSearchTimer()`, `stopMmSearchTimer()`; wired timer start/stop into search/cancel/back/match-found/not-queued flows; updated waiting arena canvas text to include `(${remaining}s remaining)`
+  - `tests/instructions.test.js` — New file (13 tests: tagline, step indicator, room creation instructions, join placeholder, controller labels, matchmaking text, waiting status)
+- **Learnings:**
+  - Several AC items were already implemented from prior stories (room creation share text, copy→copied, placeholder format) — just needed minor tweaks
+  - `import.meta.dirname` isn't available in Jest's VM module experimental mode — use `fileURLToPath(import.meta.url)` + `dirname()` instead
+  - The matchmaking search timer needs cleanup in 5 places: cancel, back, match found, not_queued status, and the `handleMatchFound` entry — easy to miss one
+  - All quality gates: 493 Python tests, ruff, mypy, 163 JS tests pass
+---
+

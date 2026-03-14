@@ -36,11 +36,11 @@ export const DG = new Proxy({}, { get: (_, key) => getDG()[key] });
 // Player input modes
 // ─────────────────────────────────────────────
 export const INPUT_MODES = [
-  { id: 'controller', label: 'Keys',  desc: 'Keyboard controls', p2Disabled: true },
-  { id: 'voice',      label: 'Voice', desc: 'Voice agent fighter', p1Only: true },
-  { id: 'phone',      label: 'Phone', desc: 'Call in to fight' },
-  { id: 'simulated',  label: 'Sim',   desc: 'Random command bot', mpDisabled: true },
-  { id: 'llm',        label: 'LLM',   desc: 'AI-powered fighter', mpDisabled: true },
+  { id: 'controller', label: 'Keys',  desc: 'Keyboard — use arrow keys and Z/X', p2Disabled: true },
+  { id: 'voice',      label: 'Voice', desc: 'Voice — speak commands into your mic', p1Only: true },
+  { id: 'phone',      label: 'Phone', desc: 'Phone — call in from your phone' },
+  { id: 'simulated',  label: 'Sim',   desc: 'Simulated — random AI commands', mpDisabled: true },
+  { id: 'llm',        label: 'LLM',   desc: 'LLM — tactical AI with game awareness', mpDisabled: true },
 ];
 
 // ─────────────────────────────────────────────
