@@ -519,6 +519,125 @@ class TestAuthMe:
             server.oidc_config = None
 
 
+# ─── Username update endpoint ─────────────────
+
+
+class TestUsernameEndpoint:
+    """Tests for POST /api/auth/username."""
+
+    @staticmethod
+    def _get_test_config() -> OIDCConfig:
+        return OIDCConfig(
+            issuer="https://id.example.com",
+            client_id="test-client",
+            client_secret="test-secret",
+            authorization_endpoint="https://id.example.com/authorize",
+            token_endpoint="https://id.example.com/token",
+            userinfo_endpoint="https://id.example.com/userinfo",
+        )
+
+    @patch("server.fetch_userinfo", new_callable=AsyncMock)
+    def test_username_update_success(self, mock_userinfo) -> None:
+        mock_userinfo.return_value = {"sub": "u1", "name": "Alice"}
+        mock_elo = MagicMock()
+        mock_elo.update_username = AsyncMock(return_value="cool-ninja")
+        with TestClient(app=app) as client:
+            server.oidc_config = self._get_test_config()
+            server.elo_manager = mock_elo
+            resp = client.post(
+                "/api/auth/username",
+                content=json.dumps({"name": "cool-ninja"}),
+                headers={"Authorization": "Bearer valid-token"},
+            )
+            assert resp.status_code == 201
+            assert resp.json()["name"] == "cool-ninja"
+            mock_elo.update_username.assert_called_once_with("u1", "cool-ninja")
+            server.oidc_config = None
+            server.elo_manager = None
+
+    @patch("server.fetch_userinfo", new_callable=AsyncMock)
+    def test_username_conflict_returns_409(self, mock_userinfo) -> None:
+        mock_userinfo.return_value = {"sub": "u1", "name": "Alice"}
+        mock_elo = MagicMock()
+        mock_elo.update_username = AsyncMock(return_value=None)
+        with TestClient(app=app) as client:
+            server.oidc_config = self._get_test_config()
+            server.elo_manager = mock_elo
+            resp = client.post(
+                "/api/auth/username",
+                content=json.dumps({"name": "taken-name"}),
+                headers={"Authorization": "Bearer valid-token"},
+            )
+            assert resp.status_code == 409
+            server.oidc_config = None
+            server.elo_manager = None
+
+    @patch("server.fetch_userinfo", new_callable=AsyncMock)
+    def test_username_invalid_format_returns_400(self, mock_userinfo) -> None:
+        mock_userinfo.return_value = {"sub": "u1", "name": "Alice"}
+        mock_elo = MagicMock()
+        mock_elo.update_username = AsyncMock(side_effect=ValueError("Invalid"))
+        with TestClient(app=app) as client:
+            server.oidc_config = self._get_test_config()
+            server.elo_manager = mock_elo
+            resp = client.post(
+                "/api/auth/username",
+                content=json.dumps({"name": "x"}),
+                headers={"Authorization": "Bearer valid-token"},
+            )
+            assert resp.status_code == 400
+            server.oidc_config = None
+            server.elo_manager = None
+
+    def test_username_no_auth_header_returns_401(self) -> None:
+        with TestClient(app=app) as client:
+            server.oidc_config = self._get_test_config()
+            resp = client.post(
+                "/api/auth/username",
+                content=json.dumps({"name": "cool-name"}),
+            )
+            assert resp.status_code == 401
+            server.oidc_config = None
+
+    def test_username_not_configured_returns_503(self) -> None:
+        with TestClient(app=app) as client:
+            server.oidc_config = None
+            resp = client.post(
+                "/api/auth/username",
+                content=json.dumps({"name": "cool-name"}),
+                headers={"Authorization": "Bearer token"},
+            )
+            assert resp.status_code == 503
+
+    @patch("server.fetch_userinfo", new_callable=AsyncMock)
+    def test_username_empty_name_returns_400(self, mock_userinfo) -> None:
+        mock_userinfo.return_value = {"sub": "u1", "name": "Alice"}
+        mock_elo = MagicMock()
+        with TestClient(app=app) as client:
+            server.oidc_config = self._get_test_config()
+            server.elo_manager = mock_elo
+            resp = client.post(
+                "/api/auth/username",
+                content=json.dumps({"name": ""}),
+                headers={"Authorization": "Bearer valid-token"},
+            )
+            assert resp.status_code == 400
+            server.oidc_config = None
+            server.elo_manager = None
+
+    def test_username_no_db_returns_503(self) -> None:
+        with TestClient(app=app) as client:
+            server.oidc_config = self._get_test_config()
+            server.elo_manager = None
+            resp = client.post(
+                "/api/auth/username",
+                content=json.dumps({"name": "cool-name"}),
+                headers={"Authorization": "Bearer token"},
+            )
+            assert resp.status_code == 503
+            server.oidc_config = None
+
+
 # ─── Auth callback route ─────────────────────
 
 

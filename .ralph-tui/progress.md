@@ -227,3 +227,26 @@ after each iteration and it's included in prompts for context.
   - All quality gates: 479 Python tests, ruff, mypy, 140 JS tests pass
 ---
 
+## 2026-03-14 - stick-fighter-j3r.12
+- Implemented editable username: inline edit in header, server-side validation and uniqueness
+- `POST /api/auth/username` endpoint: validates `[a-zA-Z0-9-]{2,30}`, checks uniqueness excluding current user, returns 409 on conflict
+- `EloManager.update_username()` method with `_is_name_taken_by_other()` for owner-aware uniqueness
+- Header UI: edit button (✎) next to display name, inline text input with Enter/Escape/blur handling
+- `auth.js`: `updateUsername()` function updates server and localStorage cache
+- CSS: `.auth-edit-btn`, `.auth-name-input`, `.auth-name-error` styles in DG design system
+- Files changed:
+  - `elo.py` — Added `USERNAME_PATTERN`, `_is_name_taken_by_other()`, `update_username()`, imported `re`
+  - `server.py` — Added `auth_username` endpoint (POST /api/auth/username), registered in route_handlers
+  - `src/auth.js` — Added `updateUsername()` export
+  - `src/main.js` — Updated `updateAuthUI()` with edit button, added `_setupUsernameEdit()` function, imported `updateUsername`
+  - `index.html` — Added CSS for `.auth-edit-btn`, `.auth-name-input`, `.auth-name-error`, `.auth-user-name.hidden`, `.auth-edit-btn.hidden`
+  - `tests/test_auth.py` — Added `TestUsernameEndpoint` class (7 tests: success, 409 conflict, 400 invalid format, 401 no auth, 503 not configured, 400 empty, 503 no DB)
+  - `tests/test_elo.py` — Added `TestUpdateUsername` class (7 tests: valid update, too short, too long, invalid chars, taken by other, same name own user, mixed case)
+  - `tests/username-edit.test.js` — New file (10 tests: validation pattern, API function behavior)
+- **Learnings:**
+  - The `_is_name_taken` pattern needed a variant `_is_name_taken_by_other` that excludes the current user — otherwise renaming to the same name would fail
+  - Litestar `@post` returns 201 by default — tests for the username endpoint assert 201 on success
+  - The `fetch_userinfo` call for auth in the username endpoint means tests must mock it (even for tests focused on validation) — the auth check runs before name validation
+  - All quality gates: 493 Python tests, ruff, mypy, 150 JS tests pass
+---
+

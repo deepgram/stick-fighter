@@ -271,6 +271,49 @@ class TestEnsureFighterUsername:
         assert len(names) == 20, "Some generated names collided"
 
 
+class TestUpdateUsername:
+    """Test username validation and update."""
+
+    @pytest.mark.asyncio
+    async def test_valid_name_updated(self, elo: EloManager) -> None:
+        await elo.set_player_name("u1", "old-name")
+        result = await elo.update_username("u1", "new-name")
+        assert result == "new-name"
+        assert await elo.get_player_name("u1") == "new-name"
+
+    @pytest.mark.asyncio
+    async def test_too_short_raises(self, elo: EloManager) -> None:
+        with pytest.raises(ValueError, match="2-30 characters"):
+            await elo.update_username("u1", "x")
+
+    @pytest.mark.asyncio
+    async def test_too_long_raises(self, elo: EloManager) -> None:
+        with pytest.raises(ValueError, match="2-30 characters"):
+            await elo.update_username("u1", "a" * 31)
+
+    @pytest.mark.asyncio
+    async def test_invalid_chars_raises(self, elo: EloManager) -> None:
+        with pytest.raises(ValueError, match="alphanumeric"):
+            await elo.update_username("u1", "bad name!")
+
+    @pytest.mark.asyncio
+    async def test_taken_by_other_returns_none(self, elo: EloManager) -> None:
+        await elo.set_player_name("other-user", "taken-name")
+        result = await elo.update_username("u1", "taken-name")
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_same_name_own_user_succeeds(self, elo: EloManager) -> None:
+        await elo.set_player_name("u1", "my-name")
+        result = await elo.update_username("u1", "my-name")
+        assert result == "my-name"
+
+    @pytest.mark.asyncio
+    async def test_alphanumeric_and_hyphens_allowed(self, elo: EloManager) -> None:
+        result = await elo.update_username("u1", "Cool-Fighter-99")
+        assert result == "Cool-Fighter-99"
+
+
 class TestUpdateRatings:
     """Test rating updates after matches."""
 

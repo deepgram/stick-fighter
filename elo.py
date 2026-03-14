@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import math
 import random
+import re
 from typing import Any
 
 import asyncpg  # type: ignore[import-untyped]
@@ -63,6 +64,7 @@ ADJECTIVES = [
 ]
 
 MAX_USERNAME_RETRIES = 10
+USERNAME_PATTERN = r"^[a-zA-Z0-9-]{2,30}$"
 
 
 def generate_fighter_username() -> str:
@@ -234,6 +236,29 @@ class EloManager:
             "SELECT 1 FROM players WHERE name = $1", name,
         )
         return row is not None
+
+    async def _is_name_taken_by_other(self, name: str, user_id: str) -> bool:
+        """Check if a display name is used by a different player."""
+        row = await self._pool.fetchrow(
+            "SELECT 1 FROM players WHERE name = $1 AND user_id != $2",
+            name, user_id,
+        )
+        return row is not None
+
+    async def update_username(self, user_id: str, name: str) -> str | None:
+        """Validate and update a player's username.
+
+        Returns the new name on success, or None if the name is taken.
+        Raises ValueError if the name format is invalid.
+        """
+        if not re.match(USERNAME_PATTERN, name):
+            raise ValueError(
+                "Username must be 2-30 characters, alphanumeric and hyphens only"
+            )
+        if await self._is_name_taken_by_other(name, user_id):
+            return None
+        await self.set_player_name(user_id, name)
+        return name
 
     async def ensure_fighter_username(self, user_id: str) -> str:
         """Return existing name or generate a unique fighter username.

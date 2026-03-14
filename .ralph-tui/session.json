@@ -3,10 +3,10 @@
   "sessionId": "e943ccda-cca9-492d-8e6d-a07660cc75be",
   "status": "running",
   "startedAt": "2026-03-14T11:01:24.391Z",
-  "updatedAt": "2026-03-14T12:25:22.605Z",
-  "currentIteration": 9,
+  "updatedAt": "2026-03-14T12:30:51.712Z",
+  "currentIteration": 10,
   "maxIterations": 0,
-  "tasksCompleted": 9,
+  "tasksCompleted": 10,
   "isPaused": false,
   "agentPlugin": "claude",
   "trackerState": {
@@ -160,6 +160,16 @@
       "durationMs": 309669,
       "startedAt": "2026-03-14T11:55:26.957Z",
       "endedAt": "2026-03-14T12:00:36.626Z"
+    },
+    {
+      "iteration": 10,
+      "status": "completed",
+      "taskId": "stick-fighter-j3r.13",
+      "taskTitle": "US-013: Hadouken special move",
+      "taskCompleted": true,
+      "durationMs": 1484217,
+      "startedAt": "2026-03-14T12:00:38.260Z",
+      "endedAt": "2026-03-14T12:25:22.477Z"
     }
   ],
   "skippedTaskIds": [],

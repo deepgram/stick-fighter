@@ -8,7 +8,7 @@ import { PhoneAdapter } from './phone.js';
 import { SimulatedAdapter } from './simulated.js';
 import { LLMAdapter } from './llm.js';
 import { parseRoute } from './router.js';
-import { isAuthConfigured, login, logout, handleCallback, checkAuth, isLoggedIn, getUser } from './auth.js';
+import { isAuthConfigured, login, logout, handleCallback, checkAuth, isLoggedIn, getUser, updateUsername } from './auth.js';
 import { PeerConnection, RemoteInputAdapter } from './webrtc.js';
 import { PredictionManager } from './prediction.js';
 
@@ -1567,7 +1567,11 @@ function updateAuthUI() {
     const user = getUser();
     const name = user?.name || 'User';
     headerAuth.innerHTML = `
-      <span class="auth-user-name">${name}</span>
+      <span class="auth-user-name" id="auth-display-name">${name}</span>
+      <button class="auth-edit-btn" id="btn-auth-edit" title="Edit username">✎</button>
+      <input class="auth-name-input hidden" id="auth-name-input" type="text"
+        maxlength="30" placeholder="2-30 chars, a-z 0-9 -" spellcheck="false" autocomplete="off">
+      <span class="auth-name-error hidden" id="auth-name-error"></span>
       <button class="auth-logout-btn" id="btn-auth-logout">LOG OUT</button>
     `;
     headerAuth.classList.remove('hidden');
@@ -1575,6 +1579,7 @@ function updateAuthUI() {
       logout();
       updateAuthUI();
     });
+    _setupUsernameEdit();
   } else {
     // Show login button only if OIDC is configured (check cached config)
     headerAuth.innerHTML = `
@@ -1583,6 +1588,66 @@ function updateAuthUI() {
     // Will be shown/hidden after config check
     headerAuth.classList.add('hidden');
   }
+}
+
+/** Wire up inline username editing in the header */
+function _setupUsernameEdit() {
+  const editBtn = document.getElementById('btn-auth-edit');
+  const nameSpan = document.getElementById('auth-display-name');
+  const nameInput = document.getElementById('auth-name-input');
+  const nameError = document.getElementById('auth-name-error');
+  if (!editBtn || !nameSpan || !nameInput || !nameError) return;
+
+  function startEdit() {
+    nameInput.value = nameSpan.textContent;
+    nameSpan.classList.add('hidden');
+    editBtn.classList.add('hidden');
+    nameError.classList.add('hidden');
+    nameInput.classList.remove('hidden');
+    nameInput.focus();
+    nameInput.select();
+  }
+
+  async function confirmEdit() {
+    const newName = nameInput.value.trim();
+    const currentName = getUser()?.name || '';
+    if (!newName || newName === currentName) {
+      cancelEdit();
+      return;
+    }
+    nameInput.disabled = true;
+    nameError.classList.add('hidden');
+    const result = await updateUsername(newName);
+    nameInput.disabled = false;
+    if (result.error) {
+      nameError.textContent = result.error;
+      nameError.classList.remove('hidden');
+      nameInput.focus();
+      return;
+    }
+    // Success — update display
+    nameSpan.textContent = result.name;
+    cancelEdit();
+  }
+
+  function cancelEdit() {
+    nameInput.classList.add('hidden');
+    nameError.classList.add('hidden');
+    nameSpan.classList.remove('hidden');
+    editBtn.classList.remove('hidden');
+  }
+
+  editBtn.addEventListener('click', startEdit);
+  nameInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); confirmEdit(); }
+    if (e.key === 'Escape') { e.preventDefault(); cancelEdit(); }
+  });
+  nameInput.addEventListener('blur', () => {
+    // Small delay so click on error doesn't immediately cancel
+    setTimeout(() => {
+      if (document.activeElement !== nameInput) cancelEdit();
+    }, 150);
+  });
 }
 
 /** Initialize auth — check config, handle callback, restore session */

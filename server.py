@@ -1599,6 +1599,51 @@ async def auth_me(request: Request) -> dict[str, Any]:
     }
 
 
+@post("/api/auth/username")
+async def auth_username(request: Request, data: dict[str, str]) -> dict[str, Any]:
+    """Update the authenticated user's display name.
+
+    Request body:
+        name: str — new username (2-30 chars, alphanumeric + hyphens)
+
+    Requires Authorization: Bearer <access_token> header.
+    Returns 409 if the name is already taken by another user.
+    """
+    if oidc_config is None or not oidc_config.configured:
+        raise HTTPException(status_code=503, detail="OIDC not configured")
+
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Bearer token required")
+
+    if elo_manager is None:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    # Get user ID from access token via userinfo endpoint
+    access_token = auth_header[7:]
+    userinfo = await fetch_userinfo(oidc_config, access_token)
+    if "error" in userinfo:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+    user_id = userinfo.get("sub", "")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Could not determine user identity")
+
+    name = data.get("name", "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Name is required")
+
+    try:
+        result = await elo_manager.update_username(user_id, name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    if result is None:
+        raise HTTPException(status_code=409, detail="Username is already taken")
+
+    return {"name": result}
+
+
 # ─────────────────────────────────────────────
 # ELO / Leaderboard
 # ─────────────────────────────────────────────
@@ -1777,6 +1822,7 @@ app = Litestar(
         auth_token,
         auth_refresh,
         auth_me,
+        auth_username,
         room_create,
         room_join,
         room_status,

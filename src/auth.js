@@ -235,6 +235,43 @@ export async function checkAuth() {
   return true;
 }
 
+/**
+ * Update the authenticated user's display name.
+ * @param {string} newName — new username (2-30 chars, alphanumeric + hyphens)
+ * @returns {Promise<{name: string}|{error: string}>}
+ */
+export async function updateUsername(newName) {
+  const token = getAccessToken();
+  if (!token) return { error: 'Not logged in' };
+
+  try {
+    const resp = await fetch('/api/auth/username', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+      },
+      body: JSON.stringify({ name: newName }),
+    });
+
+    if (!resp.ok) {
+      const data = await resp.json().catch(() => ({}));
+      return { error: data.detail || `Error ${resp.status}` };
+    }
+
+    const data = await resp.json();
+    // Update stored user info with new name
+    const user = getUser();
+    if (user) {
+      user.name = data.name;
+      localStorage.setItem(STORAGE_KEYS.user, JSON.stringify(user));
+    }
+    return data;
+  } catch {
+    return { error: 'Network error' };
+  }
+}
+
 // ── Internal helpers ──
 
 function _storeTokens(data) {
