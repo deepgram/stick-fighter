@@ -8,10 +8,14 @@ import pytest
 import pytest_asyncio
 
 from elo import (
+    ADJECTIVES,
     EloManager,
+    FIGHTER_NOUNS,
+    STICK_NOUNS,
     calculate_elo_change,
     controller_to_category,
     ensure_schema,
+    generate_fighter_username,
     DEFAULT_RATING,
     K_FACTOR_NEW,
     K_FACTOR_ESTABLISHED,
@@ -119,6 +123,49 @@ class TestControllerToCategory:
         assert controller_to_category("unknown") is None
 
 
+class TestGenerateFighterUsername:
+    """Test random fighter username generation."""
+
+    def test_format_two_or_three_parts(self) -> None:
+        for _ in range(50):
+            name = generate_fighter_username()
+            parts = name.split("-")
+            assert len(parts) in (2, 3), f"Unexpected format: {name}"
+
+    def test_two_part_uses_fighter_and_stick(self) -> None:
+        for _ in range(100):
+            name = generate_fighter_username()
+            parts = name.split("-")
+            if len(parts) == 2:
+                assert parts[0] in FIGHTER_NOUNS
+                assert parts[1] in STICK_NOUNS
+                return
+        pytest.fail("No two-part names generated in 100 tries")
+
+    def test_three_part_uses_adjective_fighter_stick(self) -> None:
+        for _ in range(100):
+            name = generate_fighter_username()
+            parts = name.split("-")
+            if len(parts) == 3:
+                assert parts[0] in ADJECTIVES
+                assert parts[1] in FIGHTER_NOUNS
+                assert parts[2] in STICK_NOUNS
+                return
+        pytest.fail("No three-part names generated in 100 tries")
+
+    def test_word_lists_have_expected_entries(self) -> None:
+        assert "ninja" in FIGHTER_NOUNS
+        assert "stick" in STICK_NOUNS
+        assert "swift" in ADJECTIVES
+        assert len(FIGHTER_NOUNS) == 16
+        assert len(STICK_NOUNS) == 15
+        assert len(ADJECTIVES) == 12
+
+    def test_randomness(self) -> None:
+        names = {generate_fighter_username() for _ in range(20)}
+        assert len(names) > 1, "All 20 names were identical — not random"
+
+
 # ─────────────────────────────────────────────
 # EloManager async tests (requires Postgres)
 # ─────────────────────────────────────────────
@@ -185,6 +232,43 @@ class TestPlayerName:
         await elo.set_player_name("user-1", "Alice")
         await elo.set_player_name("user-1", "Bob")
         assert await elo.get_player_name("user-1") == "Bob"
+
+
+class TestEnsureFighterUsername:
+    """Test automatic fighter username assignment."""
+
+    @pytest.mark.asyncio
+    async def test_generates_name_for_new_player(self, elo: EloManager) -> None:
+        name = await elo.ensure_fighter_username("new-user")
+        assert name != ""
+        parts = name.split("-")
+        assert len(parts) in (2, 3)
+
+    @pytest.mark.asyncio
+    async def test_returns_existing_name(self, elo: EloManager) -> None:
+        await elo.set_player_name("user-1", "custom-name")
+        name = await elo.ensure_fighter_username("user-1")
+        assert name == "custom-name"
+
+    @pytest.mark.asyncio
+    async def test_stores_generated_name(self, elo: EloManager) -> None:
+        name = await elo.ensure_fighter_username("user-2")
+        stored = await elo.get_player_name("user-2")
+        assert stored == name
+
+    @pytest.mark.asyncio
+    async def test_idempotent(self, elo: EloManager) -> None:
+        name1 = await elo.ensure_fighter_username("user-3")
+        name2 = await elo.ensure_fighter_username("user-3")
+        assert name1 == name2
+
+    @pytest.mark.asyncio
+    async def test_unique_across_players(self, elo: EloManager) -> None:
+        names = set()
+        for i in range(20):
+            name = await elo.ensure_fighter_username(f"user-{i}")
+            names.add(name)
+        assert len(names) == 20, "Some generated names collided"
 
 
 class TestUpdateRatings:

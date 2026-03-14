@@ -207,6 +207,8 @@ class TestAuthToken:
         }
         with TestClient(app=app) as client:
             server.oidc_config = self._get_test_config()
+            saved_elo = server.elo_manager
+            server.elo_manager = None  # Isolate from fighter username gen
             resp = client.post(
                 "/api/auth/token",
                 content=json.dumps({"code": "test-code"}),
@@ -218,6 +220,7 @@ class TestAuthToken:
             assert data["user"]["name"] == "Alice"
             assert data["user"]["id"] == "u1"
             server.oidc_config = None
+            server.elo_manager = saved_elo
 
     @patch("server.exchange_code", new_callable=AsyncMock)
     def test_token_exchange_provider_error(self, mock_exchange) -> None:
@@ -255,6 +258,56 @@ class TestAuthToken:
             # Verify code_verifier was forwarded to exchange_code
             _, kwargs = mock_exchange.call_args
             assert kwargs.get("code_verifier") == "abc123verifier"
+            server.oidc_config = None
+
+    @patch("server.exchange_code", new_callable=AsyncMock)
+    def test_token_exchange_generates_fighter_username(self, mock_exchange) -> None:
+        """On first login with elo_manager available, a fighter username is generated."""
+        id_token = _make_jwt({"sub": "new-user-1", "name": "Alice", "email": "a@b.com"})
+        mock_exchange.return_value = {
+            "access_token": "at-123",
+            "id_token": id_token,
+            "refresh_token": "rt-456",
+            "expires_in": 3600,
+        }
+        mock_elo = MagicMock()
+        mock_elo.ensure_fighter_username = AsyncMock(return_value="swift-ninja-stick")
+        with TestClient(app=app) as client:
+            server.oidc_config = self._get_test_config()
+            server.elo_manager = mock_elo
+            resp = client.post(
+                "/api/auth/token",
+                content=json.dumps({"code": "test-code"}),
+                headers={"Content-Type": "application/json"},
+            )
+            assert resp.status_code == 201
+            data = resp.json()
+            assert data["user"]["name"] == "swift-ninja-stick"
+            mock_elo.ensure_fighter_username.assert_called_once_with("new-user-1")
+            server.oidc_config = None
+            server.elo_manager = None
+
+    @patch("server.exchange_code", new_callable=AsyncMock)
+    def test_token_exchange_without_elo_manager_uses_oidc_name(self, mock_exchange) -> None:
+        """Without elo_manager, the OIDC name is returned as-is."""
+        id_token = _make_jwt({"sub": "u1", "name": "Alice", "email": "a@b.com"})
+        mock_exchange.return_value = {
+            "access_token": "at-123",
+            "id_token": id_token,
+            "refresh_token": "rt-456",
+            "expires_in": 3600,
+        }
+        with TestClient(app=app) as client:
+            server.oidc_config = self._get_test_config()
+            server.elo_manager = None
+            resp = client.post(
+                "/api/auth/token",
+                content=json.dumps({"code": "test-code"}),
+                headers={"Content-Type": "application/json"},
+            )
+            assert resp.status_code == 201
+            data = resp.json()
+            assert data["user"]["name"] == "Alice"
             server.oidc_config = None
 
 

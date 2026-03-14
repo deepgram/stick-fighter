@@ -10,6 +10,7 @@ Leaderboard queries use ``ORDER BY rating DESC`` on the elo_ratings table.
 from __future__ import annotations
 
 import math
+import random
 from typing import Any
 
 import asyncpg  # type: ignore[import-untyped]
@@ -39,6 +40,42 @@ def controller_to_category(controller: str) -> str | None:
     if controller in KEYBOARD_CONTROLLERS:
         return "keyboard"
     return None
+
+
+# ─────────────────────────────────────────────
+# Random fighter username generation
+# ─────────────────────────────────────────────
+
+FIGHTER_NOUNS = [
+    "ninja", "tank", "knight", "samurai", "boxer", "brawler", "warrior",
+    "striker", "guardian", "champion", "berserker", "duelist", "monk",
+    "ronin", "gladiator", "paladin",
+]
+
+STICK_NOUNS = [
+    "stick", "branch", "broom", "mop", "pole", "stretch", "twig",
+    "rod", "staff", "cane", "reed", "wand", "beam", "shaft", "spar",
+]
+
+ADJECTIVES = [
+    "swift", "shadow", "iron", "dark", "wild", "bold", "keen",
+    "fierce", "calm", "stone", "frost", "flame",
+]
+
+MAX_USERNAME_RETRIES = 10
+
+
+def generate_fighter_username() -> str:
+    """Generate a random fighter-themed username.
+
+    Format: {adjective}-{fighter}-{stick} or {fighter}-{stick}.
+    Roughly 50/50 chance of including the adjective prefix.
+    """
+    fighter = random.choice(FIGHTER_NOUNS)
+    stick = random.choice(STICK_NOUNS)
+    if random.random() < 0.5:
+        return f"{random.choice(ADJECTIVES)}-{fighter}-{stick}"
+    return f"{fighter}-{stick}"
 
 
 # ─────────────────────────────────────────────
@@ -190,6 +227,34 @@ class EloManager:
             "SELECT name FROM players WHERE user_id = $1", user_id,
         )
         return str(row["name"]) if row else ""
+
+    async def _is_name_taken(self, name: str) -> bool:
+        """Check if a display name is already used by any player."""
+        row = await self._pool.fetchrow(
+            "SELECT 1 FROM players WHERE name = $1", name,
+        )
+        return row is not None
+
+    async def ensure_fighter_username(self, user_id: str) -> str:
+        """Return existing name or generate a unique fighter username.
+
+        On first login (no entry or empty name in players table), generates
+        a random fighter-themed username and stores it. Retries on collision.
+        """
+        existing = await self.get_player_name(user_id)
+        if existing:
+            return existing
+
+        for _ in range(MAX_USERNAME_RETRIES):
+            candidate = generate_fighter_username()
+            if not await self._is_name_taken(candidate):
+                await self.set_player_name(user_id, candidate)
+                return candidate
+
+        # Extremely unlikely: all retries collided — append user_id suffix
+        fallback = f"{generate_fighter_username()}-{user_id[:6]}"
+        await self.set_player_name(user_id, fallback)
+        return fallback
 
     async def update_ratings(
         self,

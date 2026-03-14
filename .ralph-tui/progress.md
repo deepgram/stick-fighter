@@ -173,3 +173,21 @@ after each iteration and it's included in prompts for context.
   - All quality gates: 444 Python tests, ruff, mypy, 126 JS tests pass
 ---
 
+## 2026-03-14 - stick-fighter-j3r.11
+- Implemented random fighter username generation for first-time authenticated players
+- On first login (no existing name in `players` table), a random username is generated in format `{adjective}-{fighter}-{stick}` or `{fighter}-{stick}`
+- Username is checked for uniqueness against `players` table (retry up to 10 times on collision)
+- Username stored via `set_player_name()` and returned in auth token response, overriding the OIDC provider's name claim
+- Subsequent logins return the same stored username (idempotent)
+- Files changed:
+  - `elo.py` — Added `FIGHTER_NOUNS`, `STICK_NOUNS`, `ADJECTIVES` word lists, `generate_fighter_username()` function, `EloManager._is_name_taken()` and `EloManager.ensure_fighter_username()` methods
+  - `server.py` — Updated `auth_token()` to call `elo_manager.ensure_fighter_username()` when user has an ID and elo_manager is available
+  - `tests/test_elo.py` — Added `TestGenerateFighterUsername` (5 tests: format, two-part, three-part, word lists, randomness) and `TestEnsureFighterUsername` (5 tests: new player, existing name, stored, idempotent, unique)
+  - `tests/test_auth.py` — Added 2 tests (`test_token_exchange_generates_fighter_username`, `test_token_exchange_without_elo_manager_uses_oidc_name`); updated `test_token_exchange_success` to isolate from username generation
+- **Learnings:**
+  - The app lifespan creates `elo_manager` when Postgres is available, meaning existing auth tests that didn't mock it now hit the real DB. Tests that assert OIDC name directly need `server.elo_manager = None` to isolate.
+  - `_is_name_taken()` is a simple SELECT query — no need for UNIQUE constraint on the `name` column since usernames can be updated manually later
+  - With 3,120 total combinations (2,880 three-word + 240 two-word), collision probability is low but non-zero at scale. The retry+fallback approach handles this gracefully.
+  - All quality gates: 456 Python tests, ruff, mypy, 126 JS tests pass
+---
+

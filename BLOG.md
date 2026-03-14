@@ -1,4 +1,7 @@
-# How We Built a Multiplayer Fighting Game with Claude in 3 Days
+---
+title: How I Built a Multiplayer Fighting Game with Claude in 3 Days
+author: Luke Oliff <luke.oliff@deepgram.com> (https://lukeocodes.dev)
+---
 
 **TL;DR:** We built a fully playable multiplayer Street Fighter clone — with voice controls, AI opponents, ELO matchmaking, and rollback netcode — using Claude Code as our primary development tool. The entire game went from zero to deployed in about 3 days.
 

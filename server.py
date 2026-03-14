@@ -1518,6 +1518,11 @@ async def auth_token(request: Request, data: dict[str, str]) -> dict[str, Any]:
     if id_token:
         user = extract_user_from_id_token(id_token)
 
+    # On first login, generate a random fighter username
+    if user.get("id") and elo_manager is not None:
+        fighter_name = await elo_manager.ensure_fighter_username(user["id"])
+        user["name"] = fighter_name
+
     return {
         "access_token": result.get("access_token", ""),
         "id_token": id_token,
