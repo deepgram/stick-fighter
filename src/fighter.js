@@ -639,7 +639,7 @@ export class Fighter {
       if (this._rectsOverlap(hitbox, hurtbox)) {
         if (!bestHit || hurtbox.multiplier > bestHit.multiplier) {
           bestHit = {
-            hitData: ATTACK_DATA[this.currentAttack],
+            hitData: this.currentAttack === Actions.HADOUKEN ? HADOUKEN_DATA : ATTACK_DATA[this.currentAttack],
             zone: hurtbox.zone,
             multiplier: hurtbox.multiplier,
           };
@@ -734,10 +734,11 @@ export class Fighter {
     ctx.arc(skeleton.head[0], skeleton.head[1], 10, 0, Math.PI * 2);
     ctx.stroke();
 
-    // Fist/foot impact indicator during active attack frames
-    if (this.state === "attack" && this.currentAttack) {
+    // Fist/foot impact indicator during active attack frames (skip hadouken — projectile handles it)
+    if (this.state === "attack" && this.currentAttack && this.currentAttack !== Actions.HADOUKEN) {
       const data = ATTACK_DATA[this.currentAttack];
       if (
+        data &&
         this.attackFrame >= data.startup &&
         this.attackFrame < data.startup + data.active
       ) {
