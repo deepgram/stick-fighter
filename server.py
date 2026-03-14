@@ -744,6 +744,7 @@ async def room_status(code: str) -> dict[str, Any]:
 
 
 VALID_CONTROLLERS = {"controller", "voice", "phone", "simulated", "llm"}
+VALID_MP_CONTROLLERS = {"controller", "voice", "phone"}
 
 
 @post("/api/room/controller")
@@ -761,6 +762,8 @@ async def room_controller(data: dict[str, str]) -> dict[str, Any]:
 
     if controller not in VALID_CONTROLLERS:
         raise HTTPException(status_code=400, detail=f"Invalid controller: {controller}")
+    if controller not in VALID_MP_CONTROLLERS:
+        raise HTTPException(status_code=400, detail=f"Controller '{controller}' is not allowed in multiplayer")
 
     room = await room_manager.get_room(code)
     if room is None:

@@ -39,8 +39,8 @@ export const INPUT_MODES = [
   { id: 'controller', label: 'Keys',  desc: 'Keyboard controls', p2Disabled: true },
   { id: 'voice',      label: 'Voice', desc: 'Voice agent fighter', p1Only: true },
   { id: 'phone',      label: 'Phone', desc: 'Call in to fight' },
-  { id: 'simulated',  label: 'Sim',   desc: 'Random command bot' },
-  { id: 'llm',        label: 'LLM',   desc: 'AI-powered fighter' },
+  { id: 'simulated',  label: 'Sim',   desc: 'Random command bot', mpDisabled: true },
+  { id: 'llm',        label: 'LLM',   desc: 'AI-powered fighter', mpDisabled: true },
 ];
 
 // ─────────────────────────────────────────────

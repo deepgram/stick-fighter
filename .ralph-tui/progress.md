@@ -11,7 +11,8 @@ after each iteration and it's included in prompts for context.
 - **LLM endpoint retry pattern**: `llm_command()` uses a for-loop retry (2 attempts), catching all exceptions from provider functions. On double failure, returns `{"plan": [...], "fallback": true}` with random commands. Frontend checks `fallback` flag for toast display.
 - **LLM provider mocking**: Patch `server._llm_anthropic` or `server._llm_openai` (AsyncMock) — the `_call_llm_provider` wrapper delegates to these.
 - **Leaderboard mock fixture**: `lb_client` fixture uses `MagicMock` + `AsyncMock` for EloManager methods. Useful for testing endpoint validation without a real PostgreSQL connection.
-- **INPUT_MODES flag pattern**: Add boolean flags (e.g., `p1Only`, `p2Disabled`) to `INPUT_MODES` entries in `ui.js` — all UI, keyboard nav, and click handlers check these flags to exclude modes per-player.
+- **INPUT_MODES flag pattern**: Add boolean flags (e.g., `p1Only`, `p2Disabled`, `mpDisabled`) to `INPUT_MODES` entries in `ui.js` — all UI, keyboard nav, and click handlers check these flags to exclude modes per-player or per-screen-context.
+- **MP controller validation**: `VALID_MP_CONTROLLERS` (server.py) is a strict subset of `VALID_CONTROLLERS` — use it in MP endpoints (`room_controller`). Matchmaking already rejects bot controllers via `controller_to_category() → None`.
 
 ---
 
@@ -78,5 +79,24 @@ after each iteration and it's included in prompts for context.
   - httpx timeout changed from 10s to 3s; this is aggressive for LLM calls but matches PRD spec. The retry provides a second chance.
   - Litestar `@post` returns 201 by default (not 200) — tests must assert `status_code == 201`
   - All quality gates: 425 Python tests, ruff, mypy, 87 JS tests pass
+---
+
+## 2026-03-14 - stick-fighter-j3r.3
+- Restricted MP controller selection to keyboard, voice, and phone only
+- Added `mpDisabled: true` flag to simulated and LLM entries in `INPUT_MODES`
+- Room controller and matchmaking screens hide mpDisabled pills (`display: none`) and reject clicks
+- Server-side validation: added `VALID_MP_CONTROLLERS` set, `room_controller()` rejects simulated/LLM with 400
+- Single-player mode (onboarding) unaffected — still shows all 5 modes
+- Files changed:
+  - `src/ui.js` — Added `mpDisabled: true` to simulated and LLM INPUT_MODES entries
+  - `src/main.js` — Updated `updateRoomControllerUI()`, `updateMatchmakingControllerUI()`, and their click handlers to hide/reject mpDisabled modes
+  - `server.py` — Added `VALID_MP_CONTROLLERS` set; added mp-specific validation in `room_controller()`
+  - `tests/test_server.py` — Renamed `test_all_valid_controllers_accepted` → `test_all_valid_mp_controllers_accepted`; added `test_simulated_rejected_in_mp` and `test_llm_rejected_in_mp`
+  - `tests/ui.test.js` — Added 5 tests in new `INPUT_MODES MP controller restriction` describe block
+- **Learnings:**
+  - The `mpDisabled` flag is a screen-context flag (unlike `p1Only`/`p2Disabled` which are player-context flags) — same pattern, different axis
+  - Matchmaking already had implicit server-side rejection via `controller_to_category()` returning None; room_controller was the gap
+  - Using `display: none` (vs opacity 0.3) since AC says "hidden" — cleaner UX than showing disabled options the player can't use
+  - All quality gates: 434 Python tests, ruff, mypy, 98 JS tests pass
 ---
 

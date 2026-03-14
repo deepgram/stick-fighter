@@ -387,9 +387,13 @@ function showRoomControllerScreen() {
 }
 
 function updateRoomControllerUI() {
-  // Update pill selection
+  // Update pill selection — hide mpDisabled modes
   const pills = document.querySelectorAll('#room-ctrl-pills .mode-pill');
   pills.forEach((pill, i) => {
+    const mode = INPUT_MODES[i];
+    if (mode.mpDisabled) {
+      pill.style.display = 'none';
+    }
     pill.classList.toggle('selected', i === roomModeIdx);
   });
 
@@ -425,7 +429,9 @@ function updateRoomControllerUI() {
 document.getElementById('room-ctrl-pills').addEventListener('click', e => {
   const pill = e.target.closest('.mode-pill');
   if (!pill) return;
-  roomModeIdx = parseInt(pill.dataset.mode, 10);
+  const idx = parseInt(pill.dataset.mode, 10);
+  if (INPUT_MODES[idx].mpDisabled) return;
+  roomModeIdx = idx;
   updateRoomControllerUI();
 });
 
@@ -771,7 +777,13 @@ function showMatchmakingScreen() {
 
 function updateMatchmakingControllerUI() {
   const pills = document.querySelectorAll('#mm-ctrl-pills .mode-pill');
-  pills.forEach((pill, i) => pill.classList.toggle('selected', i === mmModeIdx));
+  pills.forEach((pill, i) => {
+    const mode = INPUT_MODES[i];
+    if (mode.mpDisabled) {
+      pill.style.display = 'none';
+    }
+    pill.classList.toggle('selected', i === mmModeIdx);
+  });
 
   const mode = INPUT_MODES[mmModeIdx];
   const category = controllerToCategory(mode.id);
@@ -806,7 +818,9 @@ function updateMatchmakingControllerUI() {
 document.getElementById('mm-ctrl-pills').addEventListener('click', e => {
   const pill = e.target.closest('.mode-pill');
   if (!pill) return;
-  mmModeIdx = parseInt(pill.dataset.mode, 10);
+  const idx = parseInt(pill.dataset.mode, 10);
+  if (INPUT_MODES[idx].mpDisabled) return;
+  mmModeIdx = idx;
   updateMatchmakingControllerUI();
 });
 

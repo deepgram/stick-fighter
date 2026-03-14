@@ -76,3 +76,36 @@ describe('INPUT_MODES P2 keyboard exclusion', () => {
     expect(p2ModeIdx).toBe(3);
   });
 });
+
+describe('INPUT_MODES MP controller restriction', () => {
+  test('simulated mode has mpDisabled flag', () => {
+    const sim = INPUT_MODES.find(m => m.id === 'simulated');
+    expect(sim).toBeDefined();
+    expect(sim.mpDisabled).toBe(true);
+  });
+
+  test('llm mode has mpDisabled flag', () => {
+    const llm = INPUT_MODES.find(m => m.id === 'llm');
+    expect(llm).toBeDefined();
+    expect(llm.mpDisabled).toBe(true);
+  });
+
+  test('keyboard, voice, phone do not have mpDisabled', () => {
+    const mpModes = INPUT_MODES.filter(m => ['controller', 'voice', 'phone'].includes(m.id));
+    for (const mode of mpModes) {
+      expect(mode.mpDisabled).toBeFalsy();
+    }
+  });
+
+  test('valid MP modes are exactly keyboard, voice, phone', () => {
+    const validMP = INPUT_MODES.filter(m => !m.mpDisabled);
+    const ids = validMP.map(m => m.id);
+    expect(ids).toEqual(['controller', 'voice', 'phone']);
+  });
+
+  test('single-player still has all 5 modes', () => {
+    expect(INPUT_MODES).toHaveLength(5);
+    const ids = INPUT_MODES.map(m => m.id);
+    expect(ids).toEqual(['controller', 'voice', 'phone', 'simulated', 'llm']);
+  });
+});

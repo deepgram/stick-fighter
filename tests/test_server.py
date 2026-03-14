@@ -424,10 +424,10 @@ class TestRoomController:
             )
             assert resp.status_code == 503
 
-    def test_all_valid_controllers_accepted(self, room_client_with_sync) -> None:
-        """Every INPUT_MODES id should be accepted."""
+    def test_all_valid_mp_controllers_accepted(self, room_client_with_sync) -> None:
+        """Only keyboard, voice, phone are valid in MP rooms."""
         client, sync_redis = room_client_with_sync
-        for ctrl in ("controller", "voice", "phone", "simulated", "llm"):
+        for ctrl in ("controller", "voice", "phone"):
             _create_selecting_room(sync_redis, f"room-{ctrl}", p1_id="p1-uuid")
             resp = client.post(
                 "/api/room/controller",
@@ -435,6 +435,28 @@ class TestRoomController:
                 headers={"Content-Type": "application/json"},
             )
             assert resp.status_code == 201, f"Controller '{ctrl}' rejected"
+
+    def test_simulated_rejected_in_mp(self, room_client_with_sync) -> None:
+        """Simulated controller is not allowed in multiplayer rooms."""
+        client, sync_redis = room_client_with_sync
+        _create_selecting_room(sync_redis, "room-sim", p1_id="p1-uuid")
+        resp = client.post(
+            "/api/room/controller",
+            content=json.dumps({"code": "room-sim", "playerId": "p1-uuid", "controller": "simulated"}),
+            headers={"Content-Type": "application/json"},
+        )
+        assert resp.status_code == 400
+
+    def test_llm_rejected_in_mp(self, room_client_with_sync) -> None:
+        """LLM controller is not allowed in multiplayer rooms."""
+        client, sync_redis = room_client_with_sync
+        _create_selecting_room(sync_redis, "room-llm", p1_id="p1-uuid")
+        resp = client.post(
+            "/api/room/controller",
+            content=json.dumps({"code": "room-llm", "playerId": "p1-uuid", "controller": "llm"}),
+            headers={"Content-Type": "application/json"},
+        )
+        assert resp.status_code == 400
 
 
 # ─── Room rematch endpoint ─────────────────────
