@@ -210,6 +210,14 @@ class TestTransitionStatus:
         assert room["status"] == "finished"
 
     @pytest.mark.asyncio
+    async def test_selecting_to_finished_forfeit(self, manager: RoomManager) -> None:
+        """selecting → finished is allowed (forfeit when opponent doesn't pick controller)."""
+        room = await manager.create_room("player-1")
+        await manager.transition_status(room["code"], "selecting")
+        updated = await manager.transition_status(room["code"], "finished")
+        assert updated["status"] == "finished"
+
+    @pytest.mark.asyncio
     async def test_invalid_transition_raises(self, manager: RoomManager) -> None:
         room = await manager.create_room("player-1")
         # Can't skip from waiting to fighting

@@ -1,7 +1,8 @@
 import { InputManager, KeyboardAdapter, P1_KEYBOARD_MAP, P2_KEYBOARD_MAP } from './input.js';
 import { Game } from './game.js';
+import { Fighter } from './fighter.js';
 import { SFX } from './sfx.js';
-import { INPUT_MODES, LLM_PROVIDERS, updateModeSelection, updateControlsInfo, getPlayerLabel } from './ui.js';
+import { DG, INPUT_MODES, LLM_PROVIDERS, updateModeSelection, updateControlsInfo, getPlayerLabel } from './ui.js';
 import { VoiceAdapter } from './voice.js';
 import { PhoneAdapter } from './phone.js';
 import { SimulatedAdapter } from './simulated.js';
@@ -328,10 +329,20 @@ function handleRoomStatusUpdate(data) {
   if (data.status === 'selecting' && state === 'roomLobby') {
     // Both players in room — go to controller selection
     showRoomControllerScreen();
-  } else if (data.status === 'fighting') {
-    // Both controllers confirmed — start the fight
+  } else if (data.status === 'fighting' && state === 'waitingInArena') {
+    // Opponent confirmed — transition from waiting arena to real fight
+    stopRoomPolling();
+    stopWaitingInArena();
+    startMultiplayerFight(data);
+  } else if (data.status === 'fighting' && state !== 'fighting') {
+    // Both controllers confirmed — start the fight (normal path)
     stopRoomPolling();
     startMultiplayerFight(data);
+  } else if (data.status === 'finished' && state === 'waitingInArena') {
+    // Forfeit — opponent didn't pick a controller in time
+    stopRoomPolling();
+    stopWaitingInArena();
+    handleControllerForfeit(data);
   }
 
   // Update controller status text on room-controller screen
@@ -471,6 +482,9 @@ document.getElementById('btn-ctrl-confirm').addEventListener('click', async () =
     if (data.bothReady) {
       stopRoomPolling();
       startMultiplayerFight(data);
+    } else {
+      // First controller confirmed — enter the arena and wait for opponent
+      startWaitingInArena(data.controllerWaitDeadline);
     }
   } catch (err) {
     console.error('[room-ctrl] Error:', err);
@@ -482,8 +496,151 @@ document.getElementById('btn-ctrl-confirm').addEventListener('click', async () =
 // Back button on controller screen
 document.getElementById('btn-ctrl-back').addEventListener('click', () => {
   stopRoomPolling();
+  stopWaitingInArena();
   showScreen('multiplayer');
 });
+
+// ─────────────────────────────────────────────
+// Waiting in arena — shown after controller confirm, before opponent confirms
+// ─────────────────────────────────────────────
+let waitingArenaRAF = null;
+let waitingArenaDeadline = 0;
+
+function startWaitingInArena(deadline) {
+  const myNum = parseInt(localStorage.getItem('sf_playerNum') || '1', 10);
+  state = 'waitingInArena';
+
+  for (const el of Object.values(screens)) el.classList.add('hidden');
+  canvas.classList.add('active');
+  resize();
+
+  waitingArenaDeadline = deadline;
+
+  // Create a static fighter for the local player
+  const logicalW = canvas.width / dpr;
+  const logicalH = canvas.height / dpr;
+  const floorY = logicalH - 160;
+  const stageMargin = 0.05;
+  const stageLeft = logicalW * stageMargin;
+  const stageRight = logicalW * (1 - stageMargin);
+  const startOffset = (stageRight - stageLeft) * 0.25;
+
+  const myX = myNum === 1 ? stageLeft + startOffset : stageRight - startOffset;
+  const myFacing = myNum === 1 ? 1 : -1;
+  const myColor = myNum === 1 ? DG.primary : DG.secondary;
+  const waitingFighter = new Fighter(myX, floorY, myFacing, myColor);
+
+  function drawFrame() {
+    if (state !== 'waitingInArena') return;
+
+    const ctx = canvas.getContext('2d');
+    const w = canvas.width / dpr;
+    const h = canvas.height / dpr;
+    const fy = h - 160;
+    const sl = w * stageMargin;
+    const sr = w * (1 - stageMargin);
+
+    ctx.save();
+    ctx.scale(dpr, dpr);
+
+    // Background
+    ctx.fillStyle = DG.bg || '#0b0b0c';
+    ctx.fillRect(0, 0, w, h);
+
+    // Floor line
+    const floorGrad = ctx.createLinearGradient(sl, 0, sr, 0);
+    floorGrad.addColorStop(0, DG.gradStart || '#008fc1');
+    floorGrad.addColorStop(1, DG.gradEnd || '#00f099');
+    ctx.strokeStyle = floorGrad;
+    ctx.lineWidth = 2;
+    ctx.globalAlpha = 0.4;
+    ctx.beginPath();
+    ctx.moveTo(sl, fy);
+    ctx.lineTo(sr, fy);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+
+    // Stage bounds
+    ctx.strokeStyle = DG.border || '#2c2c33';
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath();
+    ctx.moveTo(sl, fy - 200);
+    ctx.lineTo(sl, fy);
+    ctx.moveTo(sr, fy - 200);
+    ctx.lineTo(sr, fy);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Draw the local fighter (idle)
+    waitingFighter.floorY = fy;
+    waitingFighter.draw(ctx);
+
+    // "Waiting for opponent..." placeholder on the opponent's side
+    const opX = myNum === 1 ? sr - startOffset : sl + startOffset;
+    ctx.font = '14px monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = DG.slate || '#949498';
+    ctx.globalAlpha = 0.5 + 0.3 * Math.sin(Date.now() / 500);
+    ctx.fillText('Waiting for opponent...', opX, fy - 60);
+    ctx.globalAlpha = 1;
+
+    // Draw ghost silhouette for opponent
+    ctx.strokeStyle = DG.pebble || '#4e4e52';
+    ctx.lineWidth = 3;
+    ctx.globalAlpha = 0.2;
+    ctx.beginPath();
+    // Head
+    ctx.arc(opX, fy - 105, 10, 0, Math.PI * 2);
+    ctx.stroke();
+    // Body
+    ctx.beginPath();
+    ctx.moveTo(opX, fy - 95);
+    ctx.lineTo(opX, fy - 55);
+    ctx.stroke();
+    // Arms
+    ctx.beginPath();
+    ctx.moveTo(opX - 20, fy - 80);
+    ctx.lineTo(opX + 20, fy - 80);
+    ctx.stroke();
+    // Legs
+    ctx.beginPath();
+    ctx.moveTo(opX, fy - 55);
+    ctx.lineTo(opX - 15, fy);
+    ctx.moveTo(opX, fy - 55);
+    ctx.lineTo(opX + 15, fy);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+
+    // Countdown timer
+    const remaining = Math.max(0, Math.ceil((waitingArenaDeadline * 1000 - Date.now()) / 1000));
+    ctx.font = 'bold 28px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillStyle = remaining <= 10 ? (DG.danger || '#f04438') : (DG.text || '#fbfbff');
+    ctx.fillText(`${remaining}s`, w / 2, 40);
+
+    ctx.font = '12px monospace';
+    ctx.fillStyle = DG.slate || '#949498';
+    ctx.fillText('Waiting for opponent to pick a controller...', w / 2, 62);
+
+    ctx.restore();
+
+    waitingArenaRAF = requestAnimationFrame(drawFrame);
+  }
+
+  waitingArenaRAF = requestAnimationFrame(drawFrame);
+
+  // Ensure room polling is active to detect opponent readiness
+  startRoomPolling();
+}
+
+function stopWaitingInArena() {
+  if (waitingArenaRAF !== null) {
+    cancelAnimationFrame(waitingArenaRAF);
+    waitingArenaRAF = null;
+  }
+  waitingArenaDeadline = 0;
+}
 
 /** Start a multiplayer fight using the locally selected controller */
 function startMultiplayerFight(_roomData) {
@@ -579,6 +736,38 @@ function startMultiplayerFight(_roomData) {
 // ─────────────────────────────────────────────
 // Multiplayer match results
 // ─────────────────────────────────────────────
+
+/** Handle forfeit when opponent didn't pick a controller within the deadline */
+function handleControllerForfeit(data) {
+  const myNum = parseInt(localStorage.getItem('sf_playerNum') || '1', 10);
+  const forfeitWinner = data.forfeitWinner;
+
+  canvas.classList.remove('active');
+
+  // Show results screen with forfeit info
+  const winnerEl = document.getElementById('results-winner');
+  winnerEl.classList.remove('p1-wins', 'p2-wins', 'draw');
+
+  if (forfeitWinner === myNum) {
+    winnerEl.textContent = 'YOU WIN!';
+    winnerEl.classList.add(myNum === 1 ? 'p1-wins' : 'p2-wins');
+  } else {
+    winnerEl.textContent = 'YOU LOSE';
+    winnerEl.classList.add(forfeitWinner === 1 ? 'p1-wins' : 'p2-wins');
+  }
+
+  document.getElementById('results-title').textContent = 'OPPONENT FORFEITED';
+  document.getElementById('results-p1-hp').textContent = '';
+  document.getElementById('results-p2-hp').textContent = 'Opponent did not select a controller in time';
+
+  const eloEl = document.getElementById('results-elo');
+  eloEl.classList.add('hidden');
+  eloEl.innerHTML = '';
+
+  state = 'matchResults';
+  showScreen('matchResults');
+  game = null;
+}
 
 /** Handle the round_over message from the server */
 async function handleMultiplayerRoundOver(msg) {

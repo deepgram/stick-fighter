@@ -13,6 +13,8 @@ after each iteration and it's included in prompts for context.
 - **Leaderboard mock fixture**: `lb_client` fixture uses `MagicMock` + `AsyncMock` for EloManager methods. Useful for testing endpoint validation without a real PostgreSQL connection.
 - **INPUT_MODES flag pattern**: Add boolean flags (e.g., `p1Only`, `p2Disabled`, `mpDisabled`) to `INPUT_MODES` entries in `ui.js` — all UI, keyboard nav, and click handlers check these flags to exclude modes per-player or per-screen-context.
 - **MP controller validation**: `VALID_MP_CONTROLLERS` (server.py) is a strict subset of `VALID_CONTROLLERS` — use it in MP endpoints (`room_controller`). Matchmaking already rejects bot controllers via `controller_to_category() → None`.
+- **Server-authoritative timer pattern**: Use `asyncio.create_task()` with module-level `dict[str, asyncio.Task]` for per-room async timers. Timer tasks check room state on wake (idempotent) and clean up their own dict entry. Cancel via `task.cancel()` and `dict.pop()`. Used for controller wait/forfeit timer.
+- **Room state transitions**: `selecting → finished` is valid (controller wait forfeit). Existing: `waiting → selecting → fighting → finished`.
 
 ---
 
@@ -98,5 +100,27 @@ after each iteration and it's included in prompts for context.
   - Matchmaking already had implicit server-side rejection via `controller_to_category()` returning None; room_controller was the gap
   - Using `display: none` (vs opacity 0.3) since AC says "hidden" — cleaner UX than showing disabled options the player can't use
   - All quality gates: 434 Python tests, ruff, mypy, 98 JS tests pass
+---
+
+## 2026-03-14 - stick-fighter-j3r.4
+- Implemented controller-select-then-wait flow with 60s server-authoritative forfeit timer
+- After confirming controller, player enters "waitingInArena" state: canvas shows their fighter idle, ghost silhouette for opponent, pulsing "Waiting for opponent..." text, and 60s countdown
+- Server starts asyncio forfeit timer when first controller is set; cancels when second player confirms
+- If timer expires: server transitions room `selecting → finished`, stores `forfeit_winner` in Redis
+- Frontend polls room status, detects `finished` + `forfeitWinner`, shows result screen with "OPPONENT FORFEITED"
+- If opponent confirms in time: transition to real multiplayer fight (3-2-1-FIGHT)
+- Files changed:
+  - `room_manager.py` — Added `"finished"` to valid transitions from `"selecting"`
+  - `server.py` — Added `CONTROLLER_WAIT_TIMEOUT`, `_controller_wait_tasks` dict, `_controller_wait_timer()` asyncio task, `_start_controller_wait_timer()`, `_cancel_controller_wait_timer()`; updated `room_controller()` to start/cancel timer; updated `room_status()` to include `controllerWaitDeadline` and `forfeitWinner`; updated `room_rematch()` to clear timer/deadline
+  - `src/main.js` — Added `startWaitingInArena()` (canvas render loop with Fighter, ghost, countdown), `stopWaitingInArena()`, `handleControllerForfeit()`; updated `handleRoomStatusUpdate()` to handle `waitingInArena` → `fighting` and `waitingInArena` → `finished` transitions; updated controller confirm handler to enter waiting state when `!bothReady`
+  - `tests/test_room_manager.py` — Added `test_selecting_to_finished_forfeit` to `TestTransitionStatus`
+  - `tests/test_server.py` — Added `test_first_controller_returns_wait_deadline`, `test_both_controllers_clears_deadline` to `TestRoomController`; added `TestControllerWaitForfeit` class (3 tests: deadline in status, forfeit winner in status, no forfeit by default)
+  - `tests/waiting-arena.test.js` — New file (9 tests: state transitions, countdown computation, forfeit result determination)
+- **Learnings:**
+  - The `room` dict from `set_controller()` doesn't include fields set directly via `hset` after the call — use a local variable for the response instead of `room.get()`
+  - `asyncio.create_task()` tasks need idempotent guards: check room status on wake since state may have changed while sleeping
+  - The `selecting → finished` transition required updating `_VALID_TRANSITIONS` in room_manager.py — easy to miss since the test for invalid transitions would catch attempts to use it otherwise
+  - Canvas rendering in the waiting state reuses `Fighter.draw()` directly with a standalone Fighter instance — no need for a full Game object
+  - All quality gates: 440 Python tests, ruff, mypy, 109 JS tests pass
 ---
 

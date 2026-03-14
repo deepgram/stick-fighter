@@ -23,7 +23,7 @@ ROOM_STATUSES = ("waiting", "selecting", "fighting", "finished")
 
 _VALID_TRANSITIONS: dict[str, list[str]] = {
     "waiting": ["selecting"],
-    "selecting": ["fighting"],
+    "selecting": ["fighting", "finished"],
     "fighting": ["finished"],
     "finished": [],
 }

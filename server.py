@@ -8,6 +8,7 @@ import base64
 import json
 import os
 import random
+import time
 import uuid
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
@@ -55,6 +56,69 @@ oidc_config: OIDCConfig | None = None
 elo_manager: EloManager | None = None
 cleanup_task: RoomCleanupTask | None = None
 matchmaking_task: MatchmakingTask | None = None
+
+# ─────────────────────────────────────────────
+# Controller wait / forfeit timer
+# ─────────────────────────────────────────────
+
+CONTROLLER_WAIT_TIMEOUT = 60  # seconds before opponent forfeits
+
+# Active asyncio tasks keyed by room code
+_controller_wait_tasks: dict[str, asyncio.Task[None]] = {}
+
+
+async def _controller_wait_timer(code: str, waiting_player: int) -> None:
+    """Server-authoritative forfeit timer — runs as an asyncio task.
+
+    After CONTROLLER_WAIT_TIMEOUT seconds, if the opponent still hasn't
+    selected a controller, forfeit the opponent and transition to finished.
+    """
+    try:
+        await asyncio.sleep(CONTROLLER_WAIT_TIMEOUT)
+    except asyncio.CancelledError:
+        _controller_wait_tasks.pop(code, None)
+        return
+
+    _controller_wait_tasks.pop(code, None)
+
+    if room_manager is None:
+        return
+
+    room = await room_manager.get_room(code)
+    if room is None:
+        return
+
+    # Only forfeit if still in "selecting" and opponent hasn't confirmed
+    if room["status"] != "selecting":
+        return
+
+    opponent = 2 if waiting_player == 1 else 1
+    opponent_field = f"p{opponent}_controller"
+    if room[opponent_field]:
+        return  # Opponent selected in the meantime
+
+    # Forfeit: store winner and transition to finished
+    key = f"room:{code}"
+    await room_manager._redis.hset(key, "forfeit_winner", str(waiting_player))  # type: ignore[misc]
+    try:
+        await room_manager.transition_status(code, "finished")
+        print(f"[forfeit-timer:{code}] Player {opponent} forfeited (controller wait timeout)")
+    except ValueError:
+        pass  # Room may have transitioned already
+
+
+def _start_controller_wait_timer(code: str, waiting_player: int) -> None:
+    """Start the 60s forfeit timer for a room."""
+    _cancel_controller_wait_timer(code)
+    task = asyncio.create_task(_controller_wait_timer(code, waiting_player))
+    _controller_wait_tasks[code] = task
+
+
+def _cancel_controller_wait_timer(code: str) -> None:
+    """Cancel an active forfeit timer for a room."""
+    task = _controller_wait_tasks.pop(code, None)
+    if task is not None and not task.done():
+        task.cancel()
 
 
 @asynccontextmanager
@@ -740,6 +804,8 @@ async def room_status(code: str) -> dict[str, Any]:
         "p2Controller": room["p2_controller"],
         "p1Ready": bool(room["p1_controller"]),
         "p2Ready": bool(room["p2_controller"]),
+        "controllerWaitDeadline": int(room.get("controller_wait_deadline", "0") or "0"),
+        "forfeitWinner": int(room["forfeit_winner"]) if room.get("forfeit_winner") else None,
     }
 
 
@@ -775,14 +841,23 @@ async def room_controller(data: dict[str, str]) -> dict[str, Any]:
 
     # Check if both controllers are set → transition to fighting
     both_ready = bool(room["p1_controller"]) and bool(room["p2_controller"])
+    wait_deadline = 0
     if both_ready and room["status"] == "selecting":
+        _cancel_controller_wait_timer(code)
         room = await room_manager.transition_status(code, "fighting")
+    elif not both_ready and room["status"] == "selecting":
+        # First controller confirmed — start the forfeit countdown
+        wait_deadline = int(time.time()) + CONTROLLER_WAIT_TIMEOUT
+        key = f"room:{code}"
+        await room_manager._redis.hset(key, "controller_wait_deadline", str(wait_deadline))  # type: ignore[misc]
+        _start_controller_wait_timer(code, waiting_player=player_num)
 
     return {
         "status": room["status"],
         "p1Controller": room["p1_controller"],
         "p2Controller": room["p2_controller"],
         "bothReady": both_ready,
+        "controllerWaitDeadline": wait_deadline,
     }
 
 
@@ -808,6 +883,11 @@ async def room_rematch(data: dict[str, str]) -> dict[str, Any]:
         room = await room_manager.reset_for_rematch(code)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+    # Cancel any active forfeit timer and clear deadline
+    _cancel_controller_wait_timer(code)
+    key = f"room:{code}"
+    await room_manager._redis.hdel(key, "controller_wait_deadline", "forfeit_winner")  # type: ignore[misc]
 
     # Stop the existing game loop if running
     if game_loop_manager is not None:

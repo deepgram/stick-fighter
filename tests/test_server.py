@@ -458,6 +458,86 @@ class TestRoomController:
         )
         assert resp.status_code == 400
 
+    def test_first_controller_returns_wait_deadline(self, room_client_with_sync) -> None:
+        """When first player sets controller, response includes a future deadline."""
+        client, sync_redis = room_client_with_sync
+        _create_selecting_room(sync_redis, "red-tiger-paw", p1_id="p1-uuid", p2_id="p2-uuid")
+        resp = client.post(
+            "/api/room/controller",
+            content=json.dumps({"code": "red-tiger-paw", "playerId": "p1-uuid", "controller": "controller"}),
+            headers={"Content-Type": "application/json"},
+        )
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["bothReady"] is False
+        assert data["controllerWaitDeadline"] > 0
+        # Deadline should be in the future (within ~60s)
+        assert data["controllerWaitDeadline"] > int(time.time())
+        assert data["controllerWaitDeadline"] <= int(time.time()) + 61
+
+    def test_both_controllers_clears_deadline(self, room_client_with_sync) -> None:
+        """When both controllers are set, the deadline is no longer relevant."""
+        client, sync_redis = room_client_with_sync
+        _create_selecting_room(sync_redis, "red-tiger-paw", p1_id="p1-uuid", p2_id="p2-uuid")
+        # P1 selects
+        client.post(
+            "/api/room/controller",
+            content=json.dumps({"code": "red-tiger-paw", "playerId": "p1-uuid", "controller": "controller"}),
+            headers={"Content-Type": "application/json"},
+        )
+        # P2 selects — both ready, should transition to fighting
+        resp = client.post(
+            "/api/room/controller",
+            content=json.dumps({"code": "red-tiger-paw", "playerId": "p2-uuid", "controller": "voice"}),
+            headers={"Content-Type": "application/json"},
+        )
+        data = resp.json()
+        assert data["bothReady"] is True
+        assert data["status"] == "fighting"
+        # Timer task should have been cancelled (not stored anymore)
+        assert "red-tiger-paw" not in server._controller_wait_tasks
+
+
+# ─── Controller wait forfeit ─────────────────────
+
+
+class TestControllerWaitForfeit:
+    def test_room_status_includes_deadline(self, room_client_with_sync) -> None:
+        """Room status includes controllerWaitDeadline when one player has confirmed."""
+        client, sync_redis = room_client_with_sync
+        _create_selecting_room(sync_redis, "red-tiger-paw", p1_id="p1-uuid", p2_id="p2-uuid")
+        # Set deadline directly in Redis
+        deadline = str(int(time.time()) + 60)
+        sync_redis.hset("room:red-tiger-paw", "controller_wait_deadline", deadline)
+
+        resp = client.get("/api/room/status?code=red-tiger-paw")
+        data = resp.json()
+        assert data["controllerWaitDeadline"] == int(deadline)
+
+    def test_room_status_includes_forfeit_winner(self, room_client_with_sync) -> None:
+        """Room status includes forfeitWinner after forfeit."""
+        client, sync_redis = room_client_with_sync
+        _create_selecting_room(sync_redis, "red-tiger-paw", p1_id="p1-uuid", p2_id="p2-uuid")
+        sync_redis.hset("room:red-tiger-paw", mapping={
+            "status": "finished",
+            "forfeit_winner": "1",
+        })
+
+        resp = client.get("/api/room/status?code=red-tiger-paw")
+        data = resp.json()
+        assert data["forfeitWinner"] == 1
+        assert data["status"] == "finished"
+
+    def test_room_status_no_forfeit_by_default(self, room_client_with_sync) -> None:
+        """Room status returns null forfeitWinner when no forfeit occurred."""
+        client, sync_redis = room_client_with_sync
+        _create_selecting_room(sync_redis, "red-tiger-paw")
+
+        resp = client.get("/api/room/status?code=red-tiger-paw")
+        data = resp.json()
+        assert data["forfeitWinner"] is None
+        assert data["controllerWaitDeadline"] == 0
+
 
 # ─── Room rematch endpoint ─────────────────────
 
