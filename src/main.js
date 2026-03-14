@@ -187,6 +187,11 @@ document.getElementById('btn-singleplayer').addEventListener('click', () => show
 
 // Multiplayer menu
 document.getElementById('btn-create-room').addEventListener('click', async () => {
+  const createBtn = document.getElementById('btn-create-room');
+  createBtn.classList.add('loading');
+  const origLabel = createBtn.querySelector('.mp-label');
+  const savedText = origLabel ? origLabel.textContent : '';
+  if (origLabel) origLabel.textContent = 'Creating...';
   try {
     const resp = await fetch('/api/room/create', { method: 'POST' });
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
@@ -206,6 +211,9 @@ document.getElementById('btn-create-room').addEventListener('click', async () =>
     startRoomPolling(); // Poll until P2 joins → status becomes "selecting"
   } catch (err) {
     console.error('[multiplayer] Failed to create room:', err);
+  } finally {
+    createBtn.classList.remove('loading');
+    if (origLabel) origLabel.textContent = savedText;
   }
 });
 document.getElementById('btn-join-room').addEventListener('click', () => showScreen('joinRoom'));
@@ -226,6 +234,10 @@ async function joinRoom(code) {
   const joinError = document.getElementById('join-error');
   joinError.classList.add('hidden');
   joinError.textContent = '';
+
+  joinGoBtn.disabled = true;
+  joinGoBtn.classList.add('loading');
+  joinGoBtn.textContent = 'JOINING...';
 
   try {
     const resp = await fetch('/api/room/join', {
@@ -255,6 +267,10 @@ async function joinRoom(code) {
     console.error('[multiplayer] Failed to join room:', err);
     joinError.textContent = 'Network error — could not reach server';
     joinError.classList.remove('hidden');
+  } finally {
+    joinGoBtn.classList.remove('loading');
+    joinGoBtn.textContent = 'JOIN';
+    joinGoBtn.disabled = roomCodeInput.value.trim().length < 3;
   }
 }
 
@@ -462,7 +478,8 @@ document.getElementById('btn-ctrl-confirm').addEventListener('click', async () =
   const confirmBtn = document.getElementById('btn-ctrl-confirm');
 
   confirmBtn.disabled = true;
-  confirmBtn.textContent = 'CONFIRMED';
+  confirmBtn.classList.add('loading');
+  confirmBtn.textContent = 'Confirming...';
 
   try {
     const resp = await fetch('/api/room/controller', {
@@ -474,9 +491,13 @@ document.getElementById('btn-ctrl-confirm').addEventListener('click', async () =
       const err = await resp.json().catch(() => ({}));
       console.error('[room-ctrl] Failed:', err.detail || resp.status);
       confirmBtn.disabled = false;
+      confirmBtn.classList.remove('loading');
       confirmBtn.textContent = 'CONFIRM';
       return;
     }
+
+    confirmBtn.textContent = 'CONFIRMED';
+    confirmBtn.classList.remove('loading');
 
     const data = await resp.json();
     if (data.bothReady) {
@@ -489,6 +510,7 @@ document.getElementById('btn-ctrl-confirm').addEventListener('click', async () =
   } catch (err) {
     console.error('[room-ctrl] Error:', err);
     confirmBtn.disabled = false;
+    confirmBtn.classList.remove('loading');
     confirmBtn.textContent = 'CONFIRM';
   }
 });
@@ -1027,6 +1049,10 @@ document.getElementById('btn-mm-search').addEventListener('click', startMatchmak
 async function startMatchmakingSearch() {
   const controller = INPUT_MODES[mmModeIdx].id;
   const user = isLoggedIn() ? getUser() : null;
+  const searchBtn = document.getElementById('btn-mm-search');
+  searchBtn.disabled = true;
+  searchBtn.classList.add('loading');
+  searchBtn.textContent = 'SEARCHING...';
 
   try {
     const resp = await fetch('/api/matchmaking/join', {
@@ -1042,6 +1068,9 @@ async function startMatchmakingSearch() {
     if (!resp.ok) {
       const err = await resp.json().catch(() => ({}));
       console.error('[matchmaking] Join failed:', err.detail || resp.status);
+      searchBtn.disabled = false;
+      searchBtn.classList.remove('loading');
+      searchBtn.textContent = 'SEARCH FOR OPPONENT';
       return;
     }
 
@@ -1058,6 +1087,9 @@ async function startMatchmakingSearch() {
     startMatchmakingPoll();
   } catch (err) {
     console.error('[matchmaking] Error:', err);
+    searchBtn.disabled = false;
+    searchBtn.classList.remove('loading');
+    searchBtn.textContent = 'SEARCH FOR OPPONENT';
   }
 }
 
@@ -1105,13 +1137,22 @@ function handleMatchmakingStatus(data) {
   }
 }
 
-function handleMatchFound(data) {
+async function handleMatchFound(data) {
   // If playing a waiting game, stop it first
   if (mmWaitingGame) {
     if (game) { game.running = false; game = null; }
     cleanupAdapters();
     mmWaitingGame = false;
   }
+
+  // Show "Match Found!" flash before transitioning
+  const searchingText = document.getElementById('mm-searching-text');
+  if (searchingText) {
+    searchingText.textContent = 'MATCH FOUND!';
+    searchingText.classList.remove('mm-searching-text');
+    searchingText.classList.add('mm-match-found');
+  }
+  await new Promise(r => setTimeout(r, 1200));
 
   // Store room data (same pattern as room join)
   localStorage.setItem('sf_roomCode', data.roomCode);

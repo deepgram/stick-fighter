@@ -165,6 +165,13 @@ export class LLMAdapter {
     this.game[key] = text ? { text, time: 2.0 } : null;
   }
 
+  /** Set the LLM thinking state on the game object */
+  _setThinking(active) {
+    if (!this.game) return;
+    const key = this.player === 1 ? 'p1LlmThinking' : 'p2LlmThinking';
+    this.game[key] = active;
+  }
+
   /** Apply a plan (from LLM or fallback) */
   _applyPlan(plan, elapsed = 0, isFallback = false) {
     if (plan && plan.length > 0) {
@@ -186,10 +193,14 @@ export class LLMAdapter {
     if (this._requesting || !this._running) return;
     this._requesting = true;
 
+    // Show subtle thinking indicator while LLM processes
+    this._setThinking(true);
+
     try {
       const state = this._buildState();
       if (!state) {
         this._requesting = false;
+        this._setThinking(false);
         return;
       }
 
@@ -217,6 +228,8 @@ export class LLMAdapter {
       const data = await resp.json();
       console.log(`[LLM P${this.player}] response:`, JSON.stringify(data));
 
+      this._setThinking(false);
+
       // Server may have fallen back to random commands
       if (data.fallback) {
         this._consecutiveFailures++;
@@ -234,6 +247,7 @@ export class LLMAdapter {
       }
     } catch (e) {
       // Network error or server unreachable — use client-side fallback
+      this._setThinking(false);
       this._consecutiveFailures++;
       console.error(`[LLM P${this.player}] Error (failures: ${this._consecutiveFailures}):`, e);
       this._setToast('AI connection lost');

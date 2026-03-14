@@ -124,3 +124,23 @@ after each iteration and it's included in prompts for context.
   - All quality gates: 440 Python tests, ruff, mypy, 109 JS tests pass
 ---
 
+## 2026-03-14 - stick-fighter-j3r.8
+- Added status feedback for all async operations (US-006)
+- Room creation: "Create Room" button shows "Creating..." with pulsing loading state during API call
+- Room join: "JOIN" button shows "JOINING..." with loading state; restores on error
+- Controller confirm: button shows "Confirming..." during API call, then "CONFIRMED" on success
+- Matchmaking search: button shows "SEARCHING..." during join API call; "MATCH FOUND!" flash with scale animation before transitioning to fight
+- LLM thinking: subtle pulsing "AI thinking..." indicator on canvas while LLM adapter requests a plan; suppressed when error toast is active
+- Files changed:
+  - `index.html` — Added `.loading` CSS class for buttons (pulse animation + pointer-events:none), `.mm-match-found` class with scale-in keyframe animation
+  - `src/main.js` — Added loading states to room create, room join, controller confirm, matchmaking search handlers; added "Match found!" flash with 1.2s delay in `handleMatchFound()`
+  - `src/llm.js` — Added `_setThinking()` method; `_requestPlan()` sets thinking=true on entry, false on all exit paths (success, fallback, error, early return)
+  - `src/game.js` — Added `p1LlmThinking`/`p2LlmThinking` boolean properties, `_drawLlmThinking()` method with pulsing opacity; drawn only when no error toast is active
+  - `tests/status-feedback.test.js` — New file (10 tests: thinking set/cleared on success/fallback/error/HTTP error/null state, correct player key, suppressed by toast, shows without toast)
+- **Learnings:**
+  - The existing `pulse` CSS keyframe animation (`0%→50%→100%` opacity) is reusable for loading button states — just add `pointer-events: none` to prevent double-clicks
+  - Using a separate boolean (`p1LlmThinking`) rather than reusing the timed toast for "thinking" state is cleaner — the toast timer would need constant refreshing, while the boolean is just set/cleared
+  - Button text restoration in `finally` blocks ensures consistent UI state even on error paths — important for the join button where `disabled` state also depends on input length
+  - All quality gates: 440 Python tests, ruff, mypy, 119 JS tests pass
+---
+

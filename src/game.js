@@ -113,6 +113,10 @@ export class Game {
     // LLM toast — set by LLMAdapter when AI is unavailable
     this.p1LlmToast = null; // { text, time }
     this.p2LlmToast = null;
+
+    // LLM thinking — set by LLMAdapter while requesting a plan
+    this.p1LlmThinking = false;
+    this.p2LlmThinking = false;
   }
 
   /** Logical (CSS pixel) dimensions */
@@ -579,6 +583,14 @@ Distance: ${Math.round(dist)}px | Timer: ${Math.ceil(this.roundTimer)}s`;
     this._drawLlmToast(ctx, this.p1LlmToast, 30 + 85, this.floorY + 16, DG.primary);
     this._drawLlmToast(ctx, this.p2LlmToast, w - 200 + 85, this.floorY + 16, DG.secondary);
 
+    // LLM thinking indicators (shown when no error toast is active)
+    if (this.p1LlmThinking && !this.p1LlmToast) {
+      this._drawLlmThinking(ctx, 30 + 85, this.floorY + 16, DG.primary);
+    }
+    if (this.p2LlmThinking && !this.p2LlmToast) {
+      this._drawLlmThinking(ctx, w - 200 + 85, this.floorY + 16, DG.secondary);
+    }
+
     // "Waiting..." overlay
     if (this.waitingForProviders) {
       ctx.save();
@@ -858,6 +870,17 @@ Distance: ${Math.round(dist)}px | Timer: ${Math.ceil(this.roundTimer)}s`;
     ctx.textAlign = 'center';
     ctx.fillStyle = color;
     ctx.fillText(toast.text, cx, y);
+    ctx.restore();
+  }
+
+  _drawLlmThinking(ctx, cx, y, color) {
+    ctx.save();
+    // Pulsing opacity for subtle "thinking" feel
+    ctx.globalAlpha = 0.4 + 0.3 * Math.sin(performance.now() / 300);
+    ctx.font = 'bold 10px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillStyle = color;
+    ctx.fillText('AI thinking...', cx, y);
     ctx.restore();
   }
 
