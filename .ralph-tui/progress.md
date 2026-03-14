@@ -17,6 +17,7 @@ after each iteration and it's included in prompts for context.
 - **Room state transitions**: `selecting → finished` is valid (controller wait forfeit). Existing: `waiting → selecting → fighting → finished`.
 - **PKCE auth mocking pattern**: When testing `exchange_code` directly, use `MagicMock` for the httpx response (`.json()` is sync) but `AsyncMock` for the client itself (`.post()` is async). The `@patch("auth.httpx.AsyncClient")` + `@pytest.mark.asyncio` combo is required.
 - **Client-side route pattern**: For post-auth redirects, add server route serving `index.html` (e.g. `/multiplayer`), register in `router.js` `parseRoute()`, and handle in `initAuth`'s route dispatch.
+- **Special move / projectile pattern**: Define separate `*_DATA` const (not in `ATTACK_DATA`/`ATTACK_ACTIONS`) for special moves. Fighter emits a fire event during its attack frames; Game listens and spawns a Projectile entity. Override `getAttackHitbox()` to return null for the special move (no melee hitbox). Projectile collision is handled in Game's `_updateProjectiles()` with its own damage/stun values.
 
 ---
 
@@ -189,5 +190,40 @@ after each iteration and it's included in prompts for context.
   - `_is_name_taken()` is a simple SELECT query — no need for UNIQUE constraint on the `name` column since usernames can be updated manually later
   - With 3,120 total combinations (2,880 three-word + 240 two-word), collision probability is low but non-zero at scale. The retry+fallback approach handles this gracefully.
   - All quality gates: 456 Python tests, ruff, mypy, 126 JS tests pass
+---
+
+## 2026-03-14 - stick-fighter-j3r.13
+- Implemented Hadouken special move: energy projectile that travels across the stage
+- New `HADOUKEN` action in Actions enum (JS + Python)
+- Voice/phone trigger: saying "hadouken" or "fireball" via CommandAdapter
+- Keyboard trigger: forward-forward-heavy_punch combo within 500ms (KeyboardAdapter combo buffer)
+- LLM fighters can include "hadouken" in their 5-move plans (added to system prompt + fallback commands)
+- Fighter enters hadouken windup state (~300ms, arms thrust forward skeleton pose)
+- Projectile spawns at fighter's hands, travels at 500px/s horizontally
+- Projectile rendered as animated energy ball with DG brand colors (radial gradient, trailing glow)
+- 25 damage on hit, 16 frames hitstun, blockable (10 frames blockstun), jumpable (mid-height hitbox)
+- 1.5s cooldown, one active projectile per player
+- Projectile disappears on hit or stage edge
+- Python game_engine mirrors all projectile physics, hitbox, and cooldown for server-authoritative MP
+- Files changed:
+  - `src/input.js` — HADOUKEN action, COMMAND_VOCAB entries (hadouken/fireball/energy blast), KeyboardAdapter combo buffer
+  - `src/fighter.js` — HADOUKEN_DATA, hadoukenCooldown, _skeletonHadouken, getAttackHitbox/getAttackData overrides, snapshot fields
+  - `src/game.js` — Projectile constants, projectiles array, _handleProjectileSpawn, _updateProjectiles, _drawProjectile, SFX dispatch
+  - `src/sfx.js` — hadouken_charge and hadouken_fire SFX categories
+  - `src/llm.js` — hadouken in FALLBACK_COMMANDS
+  - `game_engine/actions.py` — HADOUKEN action, HADOUKEN_DATA, HADOUKEN_COOLDOWN
+  - `game_engine/fighter.py` — hadouken_cooldown, update logic, _skeleton_hadouken, hitbox overrides
+  - `game_engine/game.py` — Projectile dataclass, _handle_projectile_spawn, _update_projectiles
+  - `game_engine/__init__.py` — Export HADOUKEN_DATA, HADOUKEN_COOLDOWN, Projectile
+  - `server.py` — hadouken in LLM_FIGHTER_SYSTEM prompt + FALLBACK_COMMANDS
+  - `tests/test_game_engine.py` — TestHadoukenFighter (14 tests) + TestHadoukenProjectile (9 tests)
+  - `tests/hadouken.test.js` — Actions, COMMAND_VOCAB, KeyboardAdapter combo, LLM fallback tests (14 tests)
+- **Learnings:**
+  - Separating HADOUKEN_DATA from ATTACK_DATA prevents it from being triggered by the normal attack input loop, which iterates `ATTACK_ACTIONS`. The special move needs its own priority check before normal attacks.
+  - The Fighter→Game event pattern (emit "hadouken:fire", Game picks up and spawns Projectile) keeps concerns separated — Fighter owns the windup animation, Game owns entity lifecycle.
+  - The `updateImpactTracking` method also references ATTACK_DATA, so HADOUKEN handling was needed there too (easy to miss since it's called from Game, not Fighter.update directly).
+  - Projectile Y position (~159px world) means fighters need feet at y < 147 to dodge, which requires being near jump peak (~107px above floor). The dodge window is ~0.25s — tight but fair.
+  - MyPy catches int/float inference conflicts in skeleton methods when the same variable is assigned int in one branch and float in another (use `float()` cast or `10.0` literal).
+  - All quality gates: 479 Python tests, ruff, mypy, 140 JS tests pass
 ---
 

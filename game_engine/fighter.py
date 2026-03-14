@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
-from game_engine.actions import Actions, AttackData, ATTACK_DATA, ATTACK_ACTIONS
+from game_engine.actions import Actions, AttackData, ATTACK_DATA, ATTACK_ACTIONS, HADOUKEN_DATA, HADOUKEN_COOLDOWN
 
 # ─────────────────────────────────────────────
 # Constants (match src/fighter.js exactly)
@@ -100,6 +100,9 @@ class Fighter:
         self.dash_timer = 0.0
         self.dash_dir = 0
 
+        # Hadouken cooldown
+        self.hadouken_cooldown = 0.0
+
         # Per-frame events (consumed by game each frame)
         self.events: set[str] = set()
 
@@ -135,6 +138,10 @@ class Fighter:
         frames = dt * 60  # convert to ~60fps frame units
         self.anim_timer += dt
 
+        # Tick hadouken cooldown
+        if self.hadouken_cooldown > 0:
+            self.hadouken_cooldown -= dt
+
         # Progress somersault
         if self.is_flipping and not self.grounded:
             self.flip_angle += dt * math.pi * 4
@@ -153,9 +160,20 @@ class Fighter:
 
         # --- Attack state (still allows movement) ---
         if self.state == "attack":
+            prev_attack_frame = self.attack_frame
             self.attack_frame += frames
             if self.current_attack is not None:
-                data = ATTACK_DATA[self.current_attack]
+                data = HADOUKEN_DATA if self.current_attack == Actions.HADOUKEN else ATTACK_DATA[self.current_attack]
+
+                # Hadouken: emit fire event when entering active frames
+                if (
+                    self.current_attack == Actions.HADOUKEN
+                    and prev_attack_frame < data.startup
+                    and self.attack_frame >= data.startup
+                ):
+                    self.events.add("hadouken:fire")
+                    self.hadouken_cooldown = HADOUKEN_COOLDOWN
+
                 total_frames = data.startup + data.active + data.recovery
                 if self.attack_frame >= total_frames:
                     if not self.grounded:
@@ -242,6 +260,21 @@ class Fighter:
             self.is_flipping = True
             self.flip_angle = 0.0
             self.events.add("somersault")
+
+        # Hadouken input (check before normal attacks — takes priority)
+        if (
+            Actions.HADOUKEN in just_pressed
+            and self.state != "attack"
+            and self.hadouken_cooldown <= 0
+            and self.grounded
+        ):
+            self.attack_context = "stand"
+            self.state = "attack"
+            self.current_attack = Actions.HADOUKEN
+            self.attack_frame = 0.0
+            self.attack_has_hit = False
+            self.dash_timer = 0.0
+            self.events.add("hadouken:windup")
 
         # Attack input (edge-triggered)
         for action in just_pressed:
@@ -398,6 +431,9 @@ class Fighter:
         """Returns the attack hitbox rect in world coords, or None if not in active frames."""
         if self.state != "attack" or self.current_attack is None or self.attack_has_hit:
             return None
+        # Hadouken has no melee hitbox — projectile handles damage
+        if self.current_attack == Actions.HADOUKEN:
+            return None
         data = ATTACK_DATA[self.current_attack]
         if self.attack_frame < data.startup or self.attack_frame >= data.startup + data.active:
             return None
@@ -420,7 +456,7 @@ class Fighter:
     def update_impact_tracking(self) -> None:
         """Store current impact point for next frame's sweep."""
         if self.state == "attack" and self.current_attack is not None:
-            data = ATTACK_DATA[self.current_attack]
+            data = HADOUKEN_DATA if self.current_attack == Actions.HADOUKEN else ATTACK_DATA[self.current_attack]
             if self.attack_frame < data.startup + data.active:
                 self._prev_impact = self._get_impact_point()
                 return
@@ -428,6 +464,8 @@ class Fighter:
 
     def get_attack_data(self) -> AttackData | None:
         """Returns the current attack's data, or None."""
+        if self.current_attack == Actions.HADOUKEN:
+            return HADOUKEN_DATA
         if self.current_attack is not None:
             return ATTACK_DATA.get(self.current_attack)
         return None
@@ -600,20 +638,24 @@ class Fighter:
         if self.current_attack is None:
             return self._skeleton_idle(f, leg_len, thigh_len, torso_len, upper_arm, forearm, head_radius)
 
-        data = ATTACK_DATA[self.current_attack]
+        data = HADOUKEN_DATA if self.current_attack == Actions.HADOUKEN else ATTACK_DATA[self.current_attack]
         is_punch = "Punch" in self.current_attack
         strength = data.damage
 
         # Phase: 0=startup, 1=active, 2=recovery
         if self.attack_frame < data.startup:
             phase = 0
-            phase_t = self.attack_frame / data.startup
+            phase_t = self.attack_frame / data.startup if data.startup > 0 else 0.0
         elif self.attack_frame < data.startup + data.active:
             phase = 1
-            phase_t = (self.attack_frame - data.startup) / data.active
+            phase_t = (self.attack_frame - data.startup) / data.active if data.active > 0 else 0.0
         else:
             phase = 2
-            phase_t = (self.attack_frame - data.startup - data.active) / data.recovery
+            phase_t = (self.attack_frame - data.startup - data.active) / data.recovery if data.recovery > 0 else 0.0
+
+        # Hadouken has its own skeleton
+        if self.current_attack == Actions.HADOUKEN:
+            return self._skeleton_hadouken(f, leg_len, thigh_len, torso_len, upper_arm, forearm, head_radius, phase, phase_t)
 
         # Build base stance from attack context
         crouch_depth = 25.0
@@ -730,6 +772,73 @@ class Fighter:
                 "elbow_front": elbow_front, "hand_front": hand_front,
                 "elbow_back": elbow_back, "hand_back": hand_back,
             }
+
+    def _skeleton_hadouken(
+        self, f: int, leg_len: float, thigh_len: float, torso_len: float,
+        upper_arm: float, forearm: float, head_radius: float,
+        phase: int, phase_t: float,
+    ) -> Skeleton:
+        """Hadouken pose: both arms thrust forward."""
+        foot_back = [-f * 14, 0.0]
+        foot_front = [f * 14, 0.0]
+        knee_back = [-f * 10, -leg_len + 3]
+        knee_front = [f * 10, -leg_len + 3]
+        hip: list[float] = [0.0, -(leg_len + thigh_len * 0.3)]
+        shoulder: list[float] = [0.0, -(leg_len + thigh_len + torso_len)]
+        head: list[float] = [0.0, -(leg_len + thigh_len + torso_len + 10 + 2)]
+
+        reach = (upper_arm + forearm) * 1.5
+        thrust_y = shoulder[1] + (hip[1] - shoulder[1]) * 0.35
+
+        if phase == 0:
+            # Gathering energy: hands pull back to hip
+            gather = phase_t
+            pull_back = -f * 6 * gather
+            shoulder[0] += pull_back * 0.5
+            head[0] += pull_back * 0.3
+            elbow_front = [f * 5 - f * 12 * gather, shoulder[1] + 8 + 12 * gather]
+            hand_front = [f * 2 - f * 8 * gather, hip[1] - 5 * (1 - gather)]
+            elbow_back = [-f * 5 - f * 5 * gather, shoulder[1] + 8 + 12 * gather]
+            hand_back = [-f * 2 - f * 5 * gather, hip[1] - 5 * (1 - gather)]
+        elif phase == 1:
+            # Release: both arms thrust forward
+            lean_fwd = float(f * 10)
+            shoulder[0] += lean_fwd
+            head[0] += lean_fwd
+            elbow_front = [f * reach * 0.4, thrust_y - 3]
+            hand_front = [f * reach, thrust_y]
+            elbow_back = [f * reach * 0.35, thrust_y + 3]
+            hand_back = [f * reach * 0.9, thrust_y + 2]
+        else:
+            # Recovery: return to guard
+            retract = 1 - phase_t
+            lean_fwd = f * 10.0 * retract
+            shoulder[0] += lean_fwd
+            head[0] += lean_fwd
+            elbow_front = [
+                f * reach * 0.4 * retract + f * 15 * (1 - retract),
+                thrust_y * retract + (shoulder[1] + 12) * (1 - retract),
+            ]
+            hand_front = [
+                f * reach * retract + f * 10 * (1 - retract),
+                thrust_y * retract + (shoulder[1] - 2) * (1 - retract),
+            ]
+            elbow_back = [
+                f * reach * 0.35 * retract + (-f * 8) * (1 - retract),
+                (thrust_y + 3) * retract + (shoulder[1] + 15) * (1 - retract),
+            ]
+            hand_back = [
+                f * reach * 0.9 * retract + (-f * 4) * (1 - retract),
+                (thrust_y + 2) * retract + (shoulder[1] + 5) * (1 - retract),
+            ]
+
+        return {
+            "foot_back": foot_back, "foot_front": foot_front,
+            "knee_back": knee_back, "knee_front": knee_front,
+            "hip": hip, "shoulder": shoulder, "head": head,
+            "elbow_front": elbow_front, "hand_front": hand_front,
+            "elbow_back": elbow_back, "hand_back": hand_back,
+        }
 
     def _skeleton_hitstun(
         self, f: int, leg_len: float, thigh_len: float, torso_len: float,

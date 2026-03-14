@@ -16,6 +16,8 @@ const SOUNDS = {
   clash:      ['/assets/punch_4.mp3', '/assets/punch_3.mp3'],
   somersault: ['/assets/somersault.mp3'],
   dash:       ['/assets/dash.mp3', '/assets/dash_2.mp3'],
+  hadouken_charge: ['/assets/somersault.mp3'],
+  hadouken_fire:   ['/assets/dash.mp3', '/assets/dash_2.mp3'],
 };
 
 export class SFX {
@@ -98,6 +100,8 @@ export class SFX {
   headshot()   { this._play('headshot', 0.7); }
   crotchshot() { this._play('crotchshot', 0.7); }
   clash()      { this._play('clash', 0.6); }
-  somersault() { this._play('somersault', 0.5); }
-  dash()       { this._play('dash', 0.4); }
+  somersault()     { this._play('somersault', 0.5); }
+  dash()           { this._play('dash', 0.4); }
+  hadoukenCharge() { this._play('hadouken_charge', 0.4); }
+  hadoukenFire()   { this._play('hadouken_fire', 0.5); }
 }

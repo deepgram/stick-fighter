@@ -28,6 +28,7 @@ export const Actions = Object.freeze({
   DASH_BACK: 'dashBack',         // semantic: away from opponent (voice/LLM)
   DASH_LEFT: 'dashLeft',         // directional: always left (keyboard)
   DASH_RIGHT: 'dashRight',       // directional: always right (keyboard)
+  HADOUKEN: 'hadouken',          // special move: energy projectile
 });
 
 // ─────────────────────────────────────────────
@@ -132,6 +133,11 @@ const COMMAND_VOCAB = {
   'medium kick':  { press: [Actions.MEDIUM_KICK] },
   'heavy kick':   { press: [Actions.HEAVY_KICK] },
   'roundhouse':   { press: [Actions.HEAVY_KICK] },
+
+  // Special moves (edge-triggered)
+  'hadouken':     { press: [Actions.HADOUKEN] },
+  'fireball':     { press: [Actions.HADOUKEN] },
+  'energy blast': { press: [Actions.HADOUKEN] },
 };
 
 export { COMMAND_VOCAB };
@@ -268,6 +274,9 @@ export class KeyboardAdapter {
     // Double-tap tracking: action → last press timestamp
     this._lastTap = {};
 
+    // Combo buffer for hadouken: forward-forward-heavyPunch within 500ms
+    this._comboBuffer = []; // [{action, time}]
+
     this._onDown = this._onDown.bind(this);
     this._onUp = this._onUp.bind(this);
   }
@@ -289,6 +298,25 @@ export class KeyboardAdapter {
 
     if (!this.held.has(action)) {
       const now = performance.now() / 1000;
+
+      // Track direction presses for hadouken combo detection
+      if (action === Actions.LEFT || action === Actions.RIGHT) {
+        this._comboBuffer.push({ action, time: now });
+        if (this._comboBuffer.length > 10) this._comboBuffer.shift();
+      }
+
+      // Hadouken combo: 2x same direction + heavy punch within 500ms
+      if (action === Actions.HEAVY_PUNCH) {
+        const COMBO_WINDOW = 0.5;
+        const recent = this._comboBuffer.filter(e => now - e.time < COMBO_WINDOW);
+        const rights = recent.filter(e => e.action === Actions.RIGHT).length;
+        const lefts = recent.filter(e => e.action === Actions.LEFT).length;
+        if (rights >= 2 || lefts >= 2) {
+          this.justPressed.add(Actions.HADOUKEN);
+          this._comboBuffer = [];
+        }
+      }
+
       const lastTap = this._lastTap[action] || 0;
 
       // Detect double-taps and emit compound actions

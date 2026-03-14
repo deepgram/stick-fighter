@@ -322,7 +322,7 @@ async def stt_proxy(socket: WebSocket) -> None:
 
 LLM_FIGHTER_SYSTEM = """STICK FIGHTER AI. You control a fighter. Plan your next 5 moves as a JSON array.
 
-COMMANDS: forward, back, crouch, jump, somersault, dash forward, dash back, light punch, medium punch, heavy punch, light kick, medium kick, heavy kick
+COMMANDS: forward, back, crouch, jump, somersault, dash forward, dash back, light punch, medium punch, heavy punch, light kick, medium kick, heavy kick, hadouken
 
 Commands can be combined: "forward light punch", "jump heavy kick", "dash forward medium punch". Movement + attack combos execute together.
 
@@ -342,6 +342,9 @@ ATTACKS (dmg/startup/active/recovery/range/type):
 - medium kick: 7/4/2/6/60/mid
 - heavy kick: 11/6/3/10/65/low (longest range)
 
+SPECIAL MOVE:
+- hadouken: 25dmg energy projectile, mid-height. ~300ms windup, 1.5s cooldown. Opponent can jump over it or block (reduced damage). Best at mid-range.
+
 COMBOS (high risk, high reward — plan sequences that set these up!):
 - "jump forward heavy kick" — aerial approach, long range, 11dmg body or 22dmg head
 - "jump forward heavy punch" — aerial punch, 10dmg body or 20dmg head
@@ -351,6 +354,8 @@ COMBOS (high risk, high reward — plan sequences that set these up!):
 - "crouch heavy kick" — sweep from crouch, 11dmg, catches standing opponents low
 - "dash forward heavy punch" — rush in with power hit, 10dmg, punishes idle opponents
 - "dash forward heavy kick" — dash into sweep, 11dmg, longest range surprise
+- "hadouken" — 25dmg projectile, great at mid-range, forces opponent to jump or block
+- "hadouken" then "dash forward heavy punch" — projectile pressure into rush-down
 
 STRATEGY:
 - Think in sequences: approach → position → attack → recover → reposition.
@@ -400,6 +405,7 @@ FALLBACK_COMMANDS: list[str] = [
     "medium punch", "medium kick",
     "heavy punch", "heavy kick",
     "forward light punch", "forward light kick",
+    "hadouken",
 ]
 
 

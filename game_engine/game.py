@@ -5,7 +5,25 @@ Mirrors the update logic from src/game.js without rendering.
 
 from __future__ import annotations
 
-from game_engine.fighter import Fighter, _rects_overlap
+from dataclasses import dataclass
+
+from game_engine.actions import HADOUKEN_DATA
+from game_engine.fighter import Fighter, Rect, _rects_overlap
+
+# Projectile constants (match src/game.js)
+PROJECTILE_SPEED = 500.0
+PROJECTILE_DAMAGE = 25.0
+
+
+@dataclass
+class Projectile:
+    """A hadouken energy ball traveling across the stage."""
+
+    x: float
+    y: float
+    vx: float
+    owner: str  # "p1" or "p2"
+    active: bool = True
 
 
 class GameEngine:
@@ -27,6 +45,7 @@ class GameEngine:
         self.round_over = False
         self.round_timer = 99.0
         self._last_clash_key: str | None = None
+        self.projectiles: list[Projectile] = []
 
     def tick(
         self,
@@ -58,6 +77,13 @@ class GameEngine:
         self.p1.update(dt, p1_actions, p1_just_pressed, self.p2, self.stage_left, self.stage_right)
         self.p2.update(dt, p2_actions, p2_just_pressed, self.p1, self.stage_left, self.stage_right)
 
+        # Handle hadouken fire events → spawn projectiles
+        self._handle_projectile_spawn(self.p1, "p1")
+        self._handle_projectile_spawn(self.p2, "p2")
+
+        # Update projectiles (movement + collision)
+        self._update_projectiles(dt, p1_actions, p2_actions)
+
         # Check attack clash
         clashed = self._check_clash(self.p1, self.p2)
 
@@ -72,6 +98,70 @@ class GameEngine:
 
         if self.p1.health <= 0 or self.p2.health <= 0:
             self.round_over = True
+
+    def _handle_projectile_spawn(self, fighter: Fighter, owner: str) -> None:
+        """Spawn a projectile when a fighter fires a hadouken."""
+        if "hadouken:fire" not in fighter.events:
+            return
+        # Only one active projectile per player
+        if any(p.owner == owner and p.active for p in self.projectiles):
+            return
+        skeleton = fighter._build_skeleton()
+        hand = fighter._local_to_world(skeleton["hand_front"][0], skeleton["hand_front"][1])
+        self.projectiles.append(
+            Projectile(x=hand[0], y=hand[1], vx=fighter.facing * PROJECTILE_SPEED, owner=owner)
+        )
+
+    def _update_projectiles(
+        self, dt: float, p1_actions: set[str], p2_actions: set[str],
+    ) -> None:
+        """Move projectiles and check for collisions with opponents."""
+        for proj in self.projectiles:
+            if not proj.active:
+                continue
+            proj.x += proj.vx * dt
+
+            # Off stage?
+            if proj.x < self.stage_left - 30 or proj.x > self.stage_right + 30:
+                proj.active = False
+                continue
+
+            # Collision with opponent
+            target = self.p2 if proj.owner == "p1" else self.p1
+            target_actions = p2_actions if proj.owner == "p1" else p1_actions
+            attacker = self.p1 if proj.owner == "p1" else self.p2
+
+            # Skip if target already stunned
+            if target.state in ("hitstun", "blockstun"):
+                continue
+
+            # Projectile hitbox (24x24 mid-height)
+            p_rect = Rect(x=proj.x - 12, y=proj.y - 12, w=24, h=24)
+            # Target body bounding box
+            t_rect = Rect(
+                x=target.x - target.width / 2,
+                y=target.y - target.height,
+                w=target.width,
+                h=target.height,
+            )
+
+            if _rects_overlap(p_rect, t_rect):
+                proj.active = False
+                if target.is_blocking(target_actions) and target.grounded:
+                    target.apply_block(HADOUKEN_DATA)
+                else:
+                    target.health = max(0.0, target.health - PROJECTILE_DAMAGE)
+                    target.state = "hitstun"
+                    target.stun_frames = float(HADOUKEN_DATA.hitstun)
+                    direction = 1 if target.x > attacker.x else -1
+                    target.vx = direction * 200.0
+                    target.current_attack = None
+
+                if target.health <= 0:
+                    self.round_over = True
+
+        # Clean up inactive
+        self.projectiles = [p for p in self.projectiles if p.active]
 
     def _check_clash(self, f1: Fighter, f2: Fighter) -> bool:
         h1 = f1.get_attack_hitbox()

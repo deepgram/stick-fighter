@@ -26,6 +26,7 @@ class Actions(StrEnum):
     DASH_BACK = "dashBack"
     DASH_LEFT = "dashLeft"
     DASH_RIGHT = "dashRight"
+    HADOUKEN = "hadouken"
 
 
 @dataclass(frozen=True)
@@ -50,3 +51,10 @@ ATTACK_DATA: dict[str, AttackData] = {
 }
 
 ATTACK_ACTIONS: frozenset[str] = frozenset(ATTACK_DATA.keys())
+
+# Hadouken is separate from normal attacks — special move with projectile
+HADOUKEN_DATA = AttackData(
+    damage=25, startup=18, active=2, recovery=12,
+    range=0, hitstun=16, blockstun=10, type="mid",
+)
+HADOUKEN_COOLDOWN = 1.5  # seconds

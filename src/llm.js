@@ -21,6 +21,7 @@ const FALLBACK_COMMANDS = [
   'medium punch', 'medium kick',
   'heavy punch', 'heavy kick',
   'forward light punch', 'forward light kick',
+  'hadouken',
 ];
 
 export class LLMAdapter {

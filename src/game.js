@@ -1,6 +1,14 @@
 import { Actions } from "./input.js";
-import { Fighter } from "./fighter.js";
+import { Fighter, HADOUKEN_DATA } from "./fighter.js";
 import { DG } from "./ui.js";
+
+// ─────────────────────────────────────────────
+// Projectile constants
+// ─────────────────────────────────────────────
+const PROJECTILE_SPEED = 500;    // px/s
+const PROJECTILE_DAMAGE = 25;
+const PROJECTILE_HITSTUN = HADOUKEN_DATA.hitstun;
+const PROJECTILE_BLOCKSTUN = HADOUKEN_DATA.blockstun;
 
 // ─────────────────────────────────────────────
 // Stage — margins as percentage of canvas width
@@ -86,6 +94,9 @@ export class Game {
     this.roundTimer = 99;
     this.hitSparks = [];
     this._lastClashKey = null;
+
+    // Active projectiles (hadouken energy balls)
+    this.projectiles = []; // {x, y, vx, owner, active, animTimer}
 
     // Fight alert state
     this.fightAlert = 0; // countdown timer for "FIGHT!" display
@@ -234,6 +245,13 @@ export class Game {
       this._dispatchFighterSfx(this.p1);
       this._dispatchFighterSfx(this.p2);
     }
+
+    // Handle hadouken fire events → spawn projectiles
+    this._handleProjectileSpawn(this.p1, 'p1');
+    this._handleProjectileSpawn(this.p2, 'p2');
+
+    // Update projectiles (movement + collision)
+    this._updateProjectiles(dt, p1Actions, p2Actions);
 
     // Check attack clash first — if both hitboxes collide, both take damage
     const clashed = this._checkClash(this.p1, this.p2);
@@ -448,9 +466,148 @@ Distance: ${Math.round(dist)}px | Timer: ${Math.ceil(this.roundTimer)}s`;
     for (const evt of fighter.events) {
       if (evt === "somersault") this.sfx.somersault();
       else if (evt === "dash") this.sfx.dash();
+      else if (evt === "hadouken:windup") this.sfx.hadoukenCharge();
+      else if (evt === "hadouken:fire") this.sfx.hadoukenFire();
       else if (evt.startsWith("punch:")) this.sfx.whoosh();
       else if (evt.startsWith("kick:")) this.sfx.whoosh();
     }
+  }
+
+  // ─────────────────────────────────────────
+  // Projectile management
+  // ─────────────────────────────────────────
+
+  _handleProjectileSpawn(fighter, owner) {
+    for (const evt of fighter.events) {
+      if (evt === 'hadouken:fire') {
+        // Only one active projectile per player
+        const hasActive = this.projectiles.some(p => p.owner === owner && p.active);
+        if (!hasActive) {
+          const skeleton = fighter._buildSkeleton();
+          const hand = fighter._localToWorld(skeleton.handFront[0], skeleton.handFront[1]);
+          this.projectiles.push({
+            x: hand[0],
+            y: hand[1],
+            vx: fighter.facing * PROJECTILE_SPEED,
+            owner,
+            active: true,
+            animTimer: 0,
+          });
+        }
+      }
+    }
+  }
+
+  _updateProjectiles(dt, p1Actions, p2Actions) {
+    for (const proj of this.projectiles) {
+      if (!proj.active) continue;
+      proj.x += proj.vx * dt;
+      proj.animTimer += dt;
+
+      // Off stage?
+      if (proj.x < this.stageLeft - 30 || proj.x > this.stageRight + 30) {
+        proj.active = false;
+        continue;
+      }
+
+      // Collision with opponent
+      const target = proj.owner === 'p1' ? this.p2 : this.p1;
+      const targetActions = proj.owner === 'p1' ? p2Actions : p1Actions;
+      const attacker = proj.owner === 'p1' ? this.p1 : this.p2;
+
+      // Skip if target already stunned
+      if (target.state === 'hitstun' || target.state === 'blockstun') continue;
+
+      // Projectile hitbox (mid-height circle, 24x24)
+      const pRect = { x: proj.x - 12, y: proj.y - 12, w: 24, h: 24 };
+      // Target body bounding box
+      const tRect = {
+        x: target.x - target.width / 2,
+        y: target.y - target.height,
+        w: target.width,
+        h: target.height,
+      };
+
+      // AABB overlap
+      if (
+        pRect.x < tRect.x + tRect.w && pRect.x + pRect.w > tRect.x &&
+        pRect.y < tRect.y + tRect.h && pRect.y + pRect.h > tRect.y
+      ) {
+        proj.active = false;
+        const atkSide = proj.owner;
+
+        if (target.isBlocking(targetActions) && target.grounded) {
+          target.applyBlock({ blockstun: PROJECTILE_BLOCKSTUN, hitstun: PROJECTILE_HITSTUN, damage: PROJECTILE_DAMAGE });
+          this.hitSparks.push({ x: proj.x, y: proj.y, life: 0.15, color: '#4488ff', text: 'BLOCK' });
+          this._logEvent('BLOCKED', '#4488ff', atkSide);
+          if (this.sfx) this.sfx.block();
+        } else {
+          target.health = Math.max(0, target.health - PROJECTILE_DAMAGE);
+          target.state = 'hitstun';
+          target.stunFrames = PROJECTILE_HITSTUN;
+          const dir = target.x > attacker.x ? 1 : -1;
+          target.vx = dir * 200;
+          target.currentAttack = null;
+
+          this.hitSparks.push({ x: proj.x, y: proj.y, life: 0.5, color: DG.primary, text: `${PROJECTILE_DAMAGE}` });
+          this._logEvent(`${PROJECTILE_DAMAGE} dmg`, DG.primary, atkSide);
+          if (this.sfx) this.sfx.hit();
+        }
+
+        if (target.health <= 0) {
+          this.roundOver = true;
+        }
+      }
+    }
+
+    // Clean up inactive
+    this.projectiles = this.projectiles.filter(p => p.active);
+  }
+
+  _drawProjectile(ctx, proj) {
+    ctx.save();
+
+    // Pulsing glow
+    const pulse = 1 + Math.sin(proj.animTimer * 15) * 0.15;
+    const radius = 12 * pulse;
+
+    // Outer glow (Deepgram brand teal)
+    ctx.globalAlpha = 0.3;
+    const glow = ctx.createRadialGradient(proj.x, proj.y, 0, proj.x, proj.y, radius * 2.5);
+    glow.addColorStop(0, DG.primary);
+    glow.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = glow;
+    ctx.beginPath();
+    ctx.arc(proj.x, proj.y, radius * 2.5, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Core energy ball (white center → teal → green edge)
+    ctx.globalAlpha = 0.9;
+    const core = ctx.createRadialGradient(proj.x, proj.y, 0, proj.x, proj.y, radius);
+    core.addColorStop(0, '#ffffff');
+    core.addColorStop(0.35, DG.gradStart);
+    core.addColorStop(1, DG.gradEnd);
+    ctx.fillStyle = core;
+    ctx.beginPath();
+    ctx.arc(proj.x, proj.y, radius, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Trailing gradient behind the ball
+    const trailLen = 35;
+    const trailDir = proj.vx > 0 ? -1 : 1;
+    ctx.globalAlpha = 0.25;
+    const trail = ctx.createLinearGradient(proj.x, proj.y, proj.x + trailDir * trailLen, proj.y);
+    trail.addColorStop(0, DG.primary);
+    trail.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = trail;
+    ctx.fillRect(
+      Math.min(proj.x, proj.x + trailDir * trailLen),
+      proj.y - 6,
+      trailLen,
+      12,
+    );
+
+    ctx.restore();
   }
 
   // ─────────────────────────────────────────
@@ -512,6 +669,12 @@ Distance: ${Math.round(dist)}px | Timer: ${Math.ceil(this.roundTimer)}s`;
     this.p2.draw(ctx);
     this.p1.drawHitboxes(ctx);
     this.p2.drawHitboxes(ctx);
+
+    // Projectiles (drawn between fighters and hit sparks)
+    for (const proj of this.projectiles) {
+      if (proj.active) this._drawProjectile(ctx, proj);
+    }
+
     if (pm) {
       this.p1.x -= pm.smoothP1.dx;
       this.p1.y -= pm.smoothP1.dy;

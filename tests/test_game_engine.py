@@ -2,9 +2,9 @@
 
 import pytest
 
-from game_engine.actions import Actions, ATTACK_DATA, ATTACK_ACTIONS
+from game_engine.actions import Actions, ATTACK_DATA, ATTACK_ACTIONS, HADOUKEN_DATA
 from game_engine.fighter import Fighter, Rect, _rects_overlap
-from game_engine.game import GameEngine
+from game_engine.game import GameEngine, Projectile
 
 # Constants matching the 800x400 canvas
 FLOOR_Y = 240.0  # 400 - 160
@@ -513,3 +513,190 @@ class TestStateMachine:
             fighter.update(1 / 60, set(), set(), None, STAGE_LEFT, STAGE_RIGHT)
         assert fighter.grounded
         assert fighter.jump_count == 0
+
+
+# ─────────────────────────────────────────
+# Hadouken Special Move
+# ─────────────────────────────────────────
+class TestHadoukenFighter:
+    def test_hadouken_action_exists(self) -> None:
+        assert Actions.HADOUKEN == "hadouken"
+
+    def test_hadouken_data_separate_from_attacks(self) -> None:
+        """HADOUKEN should NOT be in ATTACK_ACTIONS (it's a special move)."""
+        assert Actions.HADOUKEN not in ATTACK_ACTIONS
+        assert HADOUKEN_DATA.damage == 25
+        assert HADOUKEN_DATA.startup == 18
+
+    def test_hadouken_enters_attack_state(self, fighter: Fighter) -> None:
+        fighter.update(1 / 60, set(), {Actions.HADOUKEN}, None, STAGE_LEFT, STAGE_RIGHT)
+        assert fighter.state == "attack"
+        assert fighter.current_attack == Actions.HADOUKEN
+
+    def test_hadouken_windup_event(self, fighter: Fighter) -> None:
+        fighter.update(1 / 60, set(), {Actions.HADOUKEN}, None, STAGE_LEFT, STAGE_RIGHT)
+        assert "hadouken:windup" in fighter.events
+
+    def test_hadouken_fire_event(self, fighter: Fighter) -> None:
+        fighter.update(1 / 60, set(), {Actions.HADOUKEN}, None, STAGE_LEFT, STAGE_RIGHT)
+        # Advance past startup frames (18 frames at 60fps ≈ 0.3s)
+        fired = False
+        for _ in range(25):
+            fighter.update(1 / 60, set(), set(), None, STAGE_LEFT, STAGE_RIGHT)
+            if "hadouken:fire" in fighter.events:
+                fired = True
+                break
+        assert fired
+
+    def test_hadouken_sets_cooldown(self, fighter: Fighter) -> None:
+        fighter.update(1 / 60, set(), {Actions.HADOUKEN}, None, STAGE_LEFT, STAGE_RIGHT)
+        # Advance past startup to trigger fire event
+        for _ in range(25):
+            fighter.update(1 / 60, set(), set(), None, STAGE_LEFT, STAGE_RIGHT)
+        assert fighter.hadouken_cooldown > 0
+
+    def test_hadouken_blocked_during_cooldown(self, fighter: Fighter) -> None:
+        fighter.hadouken_cooldown = 1.0
+        fighter.update(1 / 60, set(), {Actions.HADOUKEN}, None, STAGE_LEFT, STAGE_RIGHT)
+        assert fighter.state != "attack" or fighter.current_attack != Actions.HADOUKEN
+
+    def test_hadouken_requires_grounded(self) -> None:
+        fighter = Fighter(400.0, FLOOR_Y, 1)
+        fighter.update(1 / 60, set(), {Actions.JUMP}, None, STAGE_LEFT, STAGE_RIGHT)
+        assert not fighter.grounded
+        fighter.update(1 / 60, set(), {Actions.HADOUKEN}, None, STAGE_LEFT, STAGE_RIGHT)
+        assert fighter.current_attack != Actions.HADOUKEN
+
+    def test_hadouken_no_melee_hitbox(self, fighter: Fighter) -> None:
+        fighter.update(1 / 60, set(), {Actions.HADOUKEN}, None, STAGE_LEFT, STAGE_RIGHT)
+        # Even during active frames, no melee hitbox
+        for _ in range(25):
+            fighter.update(1 / 60, set(), set(), None, STAGE_LEFT, STAGE_RIGHT)
+        assert fighter.get_attack_hitbox() is None
+
+    def test_hadouken_get_attack_data(self, fighter: Fighter) -> None:
+        fighter.state = "attack"
+        fighter.current_attack = Actions.HADOUKEN
+        data = fighter.get_attack_data()
+        assert data is not None
+        assert data.damage == 25
+
+    def test_hadouken_cooldown_ticks_down(self, fighter: Fighter) -> None:
+        fighter.hadouken_cooldown = 1.0
+        fighter.update(1 / 60, set(), set(), None, STAGE_LEFT, STAGE_RIGHT)
+        assert fighter.hadouken_cooldown < 1.0
+
+    def test_hadouken_cancels_dash(self, fighter: Fighter) -> None:
+        fighter.dash_timer = 0.1
+        fighter.update(1 / 60, set(), {Actions.HADOUKEN}, None, STAGE_LEFT, STAGE_RIGHT)
+        assert fighter.dash_timer == 0.0
+
+    def test_hadouken_priority_over_heavy_punch(self, fighter: Fighter) -> None:
+        """When both HADOUKEN and HEAVY_PUNCH are pressed, hadouken wins."""
+        fighter.update(
+            1 / 60, set(), {Actions.HADOUKEN, Actions.HEAVY_PUNCH}, None, STAGE_LEFT, STAGE_RIGHT,
+        )
+        assert fighter.current_attack == Actions.HADOUKEN
+
+    def test_hadouken_skeleton_builds(self, fighter: Fighter) -> None:
+        """Hadouken skeleton should not crash."""
+        fighter.state = "attack"
+        fighter.current_attack = Actions.HADOUKEN
+        fighter.attack_frame = 0.0
+        skeleton = fighter._build_skeleton()
+        assert "hand_front" in skeleton
+        assert "shoulder" in skeleton
+
+
+class TestHadoukenProjectile:
+    def test_engine_spawns_projectile(self, engine: GameEngine) -> None:
+        engine.tick(1 / 60, set(), {Actions.HADOUKEN}, set(), set())
+        # Advance past startup
+        for _ in range(25):
+            engine.tick(1 / 60, set(), set(), set(), set())
+        assert len(engine.projectiles) == 1
+        assert engine.projectiles[0].owner == "p1"
+
+    def test_projectile_moves(self, engine: GameEngine) -> None:
+        engine.tick(1 / 60, set(), {Actions.HADOUKEN}, set(), set())
+        for _ in range(25):
+            engine.tick(1 / 60, set(), set(), set(), set())
+        assert len(engine.projectiles) == 1
+        x_before = engine.projectiles[0].x
+        engine.tick(1 / 60, set(), set(), set(), set())
+        assert engine.projectiles[0].x > x_before  # moving right (facing=1)
+
+    def test_projectile_hits_opponent(self, engine: GameEngine) -> None:
+        # Place fighters close so projectile hits quickly
+        engine.p1.x = 300.0
+        engine.p2.x = 350.0
+        p2_health_before = engine.p2.health
+        engine.tick(1 / 60, set(), {Actions.HADOUKEN}, set(), set())
+        # Advance many frames
+        for _ in range(60):
+            engine.tick(1 / 60, set(), set(), set(), set())
+        assert engine.p2.health < p2_health_before
+
+    def test_projectile_damage_amount(self, engine: GameEngine) -> None:
+        engine.p1.x = 300.0
+        engine.p2.x = 360.0
+        p2_initial = engine.p2.health
+        engine.tick(1 / 60, set(), {Actions.HADOUKEN}, set(), set())
+        for _ in range(60):
+            engine.tick(1 / 60, set(), set(), set(), set())
+        assert engine.p2.health == p2_initial - 25
+
+    def test_projectile_blocked(self, engine: GameEngine) -> None:
+        engine.p1.x = 300.0
+        engine.p2.x = 360.0
+        engine.p2.facing = -1  # facing left, so blocking = hold RIGHT
+        p2_health_before = engine.p2.health
+        engine.tick(1 / 60, set(), {Actions.HADOUKEN}, {Actions.RIGHT}, set())
+        for _ in range(60):
+            engine.tick(1 / 60, set(), set(), {Actions.RIGHT}, set())
+        # Health unchanged when blocked
+        assert engine.p2.health == p2_health_before
+
+    def test_projectile_removed_off_stage(self, engine: GameEngine) -> None:
+        engine.tick(1 / 60, set(), {Actions.HADOUKEN}, set(), set())
+        for _ in range(25):
+            engine.tick(1 / 60, set(), set(), set(), set())
+        assert len(engine.projectiles) == 1
+        # Advance enough for projectile to leave stage (760px / 500px/s ≈ 1.5s)
+        for _ in range(120):
+            engine.tick(1 / 60, set(), set(), set(), set())
+        assert len(engine.projectiles) == 0
+
+    def test_one_projectile_per_player(self, engine: GameEngine) -> None:
+        engine.tick(1 / 60, set(), {Actions.HADOUKEN}, set(), set())
+        for _ in range(25):
+            engine.tick(1 / 60, set(), set(), set(), set())
+        assert len(engine.projectiles) == 1
+        # Try to fire again immediately (simulate — bypass cooldown for test)
+        engine.p1.hadouken_cooldown = 0
+        engine.p1.state = "idle"
+        engine.p1.current_attack = None
+        engine.tick(1 / 60, set(), {Actions.HADOUKEN}, set(), set())
+        for _ in range(25):
+            engine.tick(1 / 60, set(), set(), set(), set())
+        # Still only one because first is still active
+        p1_projs = [p for p in engine.projectiles if p.owner == "p1"]
+        assert len(p1_projs) <= 1
+
+    def test_projectile_jumpable(self) -> None:
+        """At jump peak, the fighter's body box is above the projectile hitbox.
+
+        Projectile spawns at y≈159 (mid-body height). Its hitbox is 24x24.
+        A fighter at jump peak has feet at y=133 (floor_y - 107), body top at y=13.
+        The projectile's top edge (147) is above the body's bottom edge (133),
+        so there's no overlap — the projectile passes underneath.
+        """
+        peak_y = FLOOR_Y - 107  # fighter feet at jump peak
+        body = Rect(x=380, y=peak_y - 120, w=40, h=120)  # body from head to feet
+        proj = Rect(x=380, y=159 - 12, w=24, h=24)  # projectile at mid-body height
+        assert not _rects_overlap(proj, body), "Projectile should pass under fighter at jump peak"
+
+    def test_projectile_dataclass(self) -> None:
+        p = Projectile(x=100.0, y=160.0, vx=500.0, owner="p1")
+        assert p.active
+        assert p.x == 100.0

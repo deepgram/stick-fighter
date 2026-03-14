@@ -75,6 +75,22 @@ const ATTACK_DATA = {
 
 const ATTACK_ACTIONS = new Set(Object.keys(ATTACK_DATA));
 
+// Hadouken is a special move — separate from normal attacks to avoid
+// triggering via the regular attack input loop. Uses same frame structure.
+const HADOUKEN_DATA = {
+  damage: 25,
+  startup: 18,   // ~300ms windup at 60fps
+  active: 2,
+  recovery: 12,
+  range: 0,      // no melee range — spawns projectile
+  hitstun: 16,
+  blockstun: 10,
+  type: "mid",
+};
+const HADOUKEN_COOLDOWN = 1.5; // seconds
+
+export { HADOUKEN_DATA };
+
 // ─────────────────────────────────────────────
 // Fighter
 // ─────────────────────────────────────────────
@@ -122,6 +138,9 @@ export class Fighter {
     this.dashTimer = 0; // time remaining in dash
     this.dashDir = 0; // -1 or 1
 
+    // Hadouken cooldown
+    this.hadoukenCooldown = 0; // seconds remaining
+
     // Per-frame events for SFX (consumed by Game each frame)
     this.events = new Set();
   }
@@ -146,6 +165,7 @@ export class Fighter {
       flip_angle: this.flipAngle,
       jump_count: this.jumpCount,
       flip_count: this.flipCount,
+      hadouken_cooldown: this.hadoukenCooldown,
     };
   }
 
@@ -169,6 +189,7 @@ export class Fighter {
     this.flipAngle = s.flip_angle;
     this.jumpCount = s.jump_count;
     this.flipCount = s.flip_count;
+    this.hadoukenCooldown = s.hadouken_cooldown || 0;
     this._prevImpact = null;
   }
 
@@ -188,6 +209,9 @@ export class Fighter {
     this.events.clear();
     const frames = dt * 60; // convert to ~60fps frame units
     this.animTimer += dt;
+
+    // Tick hadouken cooldown
+    if (this.hadoukenCooldown > 0) this.hadoukenCooldown -= dt;
 
     // Progress somersault
     if (this.isFlipping && !this.grounded) {
@@ -211,8 +235,16 @@ export class Fighter {
 
     // --- Attack state (still allows movement) ---
     if (this.state === "attack") {
+      const prevAttackFrame = this.attackFrame;
       this.attackFrame += frames;
-      const data = ATTACK_DATA[this.currentAttack];
+      const data = this.currentAttack === Actions.HADOUKEN ? HADOUKEN_DATA : ATTACK_DATA[this.currentAttack];
+
+      // Hadouken: emit fire event when entering active frames
+      if (this.currentAttack === Actions.HADOUKEN && prevAttackFrame < data.startup && this.attackFrame >= data.startup) {
+        this.events.add('hadouken:fire');
+        this.hadoukenCooldown = HADOUKEN_COOLDOWN;
+      }
+
       const totalFrames = data.startup + data.active + data.recovery;
       if (this.attackFrame >= totalFrames) {
         if (!this.grounded) this.state = "jump";
@@ -303,6 +335,22 @@ export class Fighter {
       this.isFlipping = true;
       this.flipAngle = 0;
       this.events.add("somersault");
+    }
+
+    // Hadouken input (check before normal attacks — takes priority)
+    if (
+      justPressed.has(Actions.HADOUKEN) &&
+      this.state !== "attack" &&
+      this.hadoukenCooldown <= 0 &&
+      this.grounded
+    ) {
+      this.attackContext = "stand";
+      this.state = "attack";
+      this.currentAttack = Actions.HADOUKEN;
+      this.attackFrame = 0;
+      this.attackHasHit = false;
+      this.dashTimer = 0; // cancel any active dash
+      this.events.add("hadouken:windup");
     }
 
     // Attack input (edge-triggered) — allowed from any non-attack, non-stun state
@@ -527,6 +575,8 @@ export class Fighter {
   getAttackHitbox() {
     if (this.state !== "attack" || !this.currentAttack || this.attackHasHit)
       return null;
+    // Hadouken has no melee hitbox — projectile handles damage
+    if (this.currentAttack === Actions.HADOUKEN) return null;
     const data = ATTACK_DATA[this.currentAttack];
     if (
       this.attackFrame < data.startup ||
@@ -559,7 +609,7 @@ export class Fighter {
   /** Store current impact point for next frame's sweep. Call at end of update. */
   updateImpactTracking() {
     if (this.state === "attack" && this.currentAttack) {
-      const data = ATTACK_DATA[this.currentAttack];
+      const data = this.currentAttack === Actions.HADOUKEN ? HADOUKEN_DATA : ATTACK_DATA[this.currentAttack];
       // Track during startup AND active frames so the sweep covers
       // the snap from wind-up to full extension on the first active frame
       if (this.attackFrame < data.startup + data.active) {
@@ -572,6 +622,7 @@ export class Fighter {
 
   /** Returns the current attack's data, or null */
   getAttackData() {
+    if (this.currentAttack === Actions.HADOUKEN) return HADOUKEN_DATA;
     return this.currentAttack ? ATTACK_DATA[this.currentAttack] : null;
   }
 
@@ -1008,7 +1059,7 @@ export class Fighter {
         headRadius,
       );
 
-    const data = ATTACK_DATA[this.currentAttack];
+    const data = this.currentAttack === Actions.HADOUKEN ? HADOUKEN_DATA : ATTACK_DATA[this.currentAttack];
     const isPunch = this.currentAttack.includes("Punch");
     const strength = data.damage;
 
@@ -1023,6 +1074,13 @@ export class Fighter {
     } else {
       phase = 2;
       phaseT = (this.attackFrame - data.startup - data.active) / data.recovery;
+    }
+
+    // Hadouken has its own skeleton (both arms thrust forward)
+    if (this.currentAttack === Actions.HADOUKEN) {
+      return this._skeletonHadouken(
+        f, legLen, thighLen, torsoLen, upperArm, forearm, headRadius, phase, phaseT,
+      );
     }
 
     // Build base stance from attack context
@@ -1169,6 +1227,74 @@ export class Fighter {
         handBack,
       };
     }
+  }
+
+  _skeletonHadouken(f, legLen, thighLen, torsoLen, upperArm, forearm, headRadius, phase, phaseT) {
+    // Wide power stance
+    const footBack = [-f * 14, 0];
+    const footFront = [f * 14, 0];
+    const kneeBack = [-f * 10, -legLen + 3];
+    const kneeFront = [f * 10, -legLen + 3];
+    const hip = [0, -(legLen + thighLen * 0.3)];
+    const shoulder = [0, -(legLen + thighLen + torsoLen)];
+    const head = [0, -(legLen + thighLen + torsoLen + 10 + 2)];
+
+    const reach = (upperArm + forearm) * 1.5;
+    const thrustY = shoulder[1] + (hip[1] - shoulder[1]) * 0.35;
+
+    let elbowFront, handFront, elbowBack, handBack;
+
+    if (phase === 0) {
+      // Gathering energy: both hands pull back to hip
+      const gather = phaseT;
+      const pullBack = -f * 6 * gather;
+      shoulder[0] += pullBack * 0.5;
+      head[0] += pullBack * 0.3;
+
+      elbowFront = [f * 5 - f * 12 * gather, shoulder[1] + 8 + 12 * gather];
+      handFront = [f * 2 - f * 8 * gather, hip[1] - 5 * (1 - gather)];
+      elbowBack = [-f * 5 - f * 5 * gather, shoulder[1] + 8 + 12 * gather];
+      handBack = [-f * 2 - f * 5 * gather, hip[1] - 5 * (1 - gather)];
+    } else if (phase === 1) {
+      // Release: both arms thrust forward together
+      const leanFwd = f * 10;
+      shoulder[0] += leanFwd;
+      head[0] += leanFwd;
+
+      elbowFront = [f * reach * 0.4, thrustY - 3];
+      handFront = [f * reach, thrustY];
+      elbowBack = [f * reach * 0.35, thrustY + 3];
+      handBack = [f * reach * 0.9, thrustY + 2];
+    } else {
+      // Recovery: return to guard
+      const retract = 1 - phaseT;
+      const leanFwd = f * 10 * retract;
+      shoulder[0] += leanFwd;
+      head[0] += leanFwd;
+
+      elbowFront = [
+        f * reach * 0.4 * retract + f * 15 * (1 - retract),
+        thrustY * retract + (shoulder[1] + 12) * (1 - retract),
+      ];
+      handFront = [
+        f * reach * retract + f * 10 * (1 - retract),
+        thrustY * retract + (shoulder[1] - 2) * (1 - retract),
+      ];
+      elbowBack = [
+        f * reach * 0.35 * retract + (-f * 8) * (1 - retract),
+        (thrustY + 3) * retract + (shoulder[1] + 15) * (1 - retract),
+      ];
+      handBack = [
+        f * reach * 0.9 * retract + (-f * 4) * (1 - retract),
+        (thrustY + 2) * retract + (shoulder[1] + 5) * (1 - retract),
+      ];
+    }
+
+    return {
+      footBack, footFront, kneeBack, kneeFront,
+      hip, shoulder, head,
+      elbowFront, handFront, elbowBack, handBack,
+    };
   }
 
   _skeletonHitstun(
