@@ -11,7 +11,26 @@ after each iteration and it's included in prompts for context.
 - **LLM endpoint retry pattern**: `llm_command()` uses a for-loop retry (2 attempts), catching all exceptions from provider functions. On double failure, returns `{"plan": [...], "fallback": true}` with random commands. Frontend checks `fallback` flag for toast display.
 - **LLM provider mocking**: Patch `server._llm_anthropic` or `server._llm_openai` (AsyncMock) — the `_call_llm_provider` wrapper delegates to these.
 - **Leaderboard mock fixture**: `lb_client` fixture uses `MagicMock` + `AsyncMock` for EloManager methods. Useful for testing endpoint validation without a real PostgreSQL connection.
+- **INPUT_MODES flag pattern**: Add boolean flags (e.g., `p1Only`, `p2Disabled`) to `INPUT_MODES` entries in `ui.js` — all UI, keyboard nav, and click handlers check these flags to exclude modes per-player.
 
+---
+
+## 2026-03-14 - stick-fighter-j3r.5
+- Removed P2 keyboard option in classic (single-player) mode
+- Added `p2Disabled: true` flag to keyboard entry in `INPUT_MODES`
+- `updateModeSelection` now dims and disables both `p1Only` and `p2Disabled` pills
+- Init guard bumps saved P2 mode from keyboard to simulated (idx 3)
+- Keyboard nav (ArrowLeft/Right) skips `p2Disabled` modes for P2
+- Click handler also rejects `p2Disabled` clicks for P2
+- Files changed:
+  - `src/ui.js` — Added `p2Disabled: true` to keyboard INPUT_MODE; updated pill disable condition in `updateModeSelection`
+  - `src/main.js` — Updated init guard, keyboard nav skip conditions, click handler guard
+  - `tests/ui.test.js` — New test file (6 tests: flag exists, non-keyboard modes clean, valid P2 modes, P1 unaffected, keyboard nav skip, init guard)
+- **Learnings:**
+  - The `p1Only` pattern was already well-established — `p2Disabled` follows the exact same pattern in reverse
+  - `updateModeSelection` sets `pointerEvents: 'none'` which makes pills unclickable, but the click handler still needs a guard for programmatic/keyboard-triggered mode changes
+  - Minimal DOM stubs (`globalThis.document` with `createElement`) are sufficient to import `ui.js` in node test environment without jsdom
+  - All quality gates: 432 Python tests, ruff, mypy, 93 JS tests pass
 ---
 
 ## 2026-03-14 - stick-fighter-j3r.6

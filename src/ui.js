@@ -36,7 +36,7 @@ export const DG = new Proxy({}, { get: (_, key) => getDG()[key] });
 // Player input modes
 // ─────────────────────────────────────────────
 export const INPUT_MODES = [
-  { id: 'controller', label: 'Keys',  desc: 'Keyboard controls' },
+  { id: 'controller', label: 'Keys',  desc: 'Keyboard controls', p2Disabled: true },
   { id: 'voice',      label: 'Voice', desc: 'Voice agent fighter', p1Only: true },
   { id: 'phone',      label: 'Phone', desc: 'Call in to fight' },
   { id: 'simulated',  label: 'Sim',   desc: 'Random command bot' },
@@ -116,7 +116,7 @@ export function updateModeSelection(playerNum, modeIdx, providerIdx = 0) {
   pills.forEach((pill, i) => {
     const mode = INPUT_MODES[i];
     // Disable modes restricted to other players
-    if (mode.p1Only && playerNum !== 1) {
+    if ((mode.p1Only && playerNum !== 1) || (mode.p2Disabled && playerNum === 2)) {
       pill.style.opacity = '0.3';
       pill.style.pointerEvents = 'none';
     }

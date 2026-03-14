@@ -3,10 +3,10 @@
   "sessionId": "e943ccda-cca9-492d-8e6d-a07660cc75be",
   "status": "running",
   "startedAt": "2026-03-14T11:01:24.391Z",
-  "updatedAt": "2026-03-14T11:20:17.816Z",
-  "currentIteration": 2,
+  "updatedAt": "2026-03-14T11:24:21.389Z",
+  "currentIteration": 3,
   "maxIterations": 0,
-  "tasksCompleted": 2,
+  "tasksCompleted": 3,
   "isPaused": false,
   "agentPlugin": "claude",
   "trackerState": {
@@ -29,8 +29,8 @@
       {
         "id": "stick-fighter-j3r.6",
         "title": "US-009: Distinct voice and keyboard leaderboard leagues",
-        "status": "open",
-        "completedInSession": false
+        "status": "completed",
+        "completedInSession": true
       },
       {
         "id": "stick-fighter-j3r.5",
@@ -90,6 +90,16 @@
       "durationMs": 584017,
       "startedAt": "2026-03-14T11:04:20.807Z",
       "endedAt": "2026-03-14T11:14:04.824Z"
+    },
+    {
+      "iteration": 3,
+      "status": "completed",
+      "taskId": "stick-fighter-j3r.6",
+      "taskTitle": "US-009: Distinct voice and keyboard leaderboard leagues",
+      "taskCompleted": true,
+      "durationMs": 371225,
+      "startedAt": "2026-03-14T11:14:06.467Z",
+      "endedAt": "2026-03-14T11:20:17.692Z"
     }
   ],
   "skippedTaskIds": [],

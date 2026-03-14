@@ -48,8 +48,8 @@ p1ModeIdx = Math.max(0, Math.min(p1ModeIdx, INPUT_MODES.length - 1));
 p2ModeIdx = Math.max(0, Math.min(p2ModeIdx, INPUT_MODES.length - 1));
 p1ProviderIdx = Math.max(0, Math.min(p1ProviderIdx, LLM_PROVIDERS.length - 1));
 p2ProviderIdx = Math.max(0, Math.min(p2ProviderIdx, LLM_PROVIDERS.length - 1));
-// Ensure P2 doesn't land on a P1-only mode
-if (INPUT_MODES[p2ModeIdx].p1Only) p2ModeIdx = 0;
+// Ensure P2 doesn't land on a P1-only or P2-disabled mode
+if (INPUT_MODES[p2ModeIdx].p1Only || INPUT_MODES[p2ModeIdx].p2Disabled) p2ModeIdx = 3;
 
 function saveModes() {
   localStorage.setItem('sf_p1Mode', p1ModeIdx.toString());
@@ -1190,8 +1190,9 @@ document.querySelectorAll('.mode-pills').forEach(container => {
     const pill = e.target.closest('.mode-pill');
     if (!pill) return;
     const idx = parseInt(pill.dataset.mode, 10);
-    // Skip p1Only modes for other players
+    // Skip restricted modes
     if (INPUT_MODES[idx].p1Only && player !== 1) return;
+    if (INPUT_MODES[idx].p2Disabled && player === 2) return;
     if (player === 1) {
       p1ModeIdx = idx;
       updateModeSelection(1, p1ModeIdx, p1ProviderIdx);
@@ -1239,12 +1240,12 @@ window.addEventListener('keydown', e => {
       updateModeSelection(1, p1ModeIdx, p1ProviderIdx);
       saveModes();
     } else if (e.code === 'ArrowLeft') {
-      do { p2ModeIdx = (p2ModeIdx - 1 + modeCount) % modeCount; } while (INPUT_MODES[p2ModeIdx].p1Only);
+      do { p2ModeIdx = (p2ModeIdx - 1 + modeCount) % modeCount; } while (INPUT_MODES[p2ModeIdx].p1Only || INPUT_MODES[p2ModeIdx].p2Disabled);
       updateModeSelection(2, p2ModeIdx, p2ProviderIdx);
       saveModes();
       e.preventDefault();
     } else if (e.code === 'ArrowRight') {
-      do { p2ModeIdx = (p2ModeIdx + 1) % modeCount; } while (INPUT_MODES[p2ModeIdx].p1Only);
+      do { p2ModeIdx = (p2ModeIdx + 1) % modeCount; } while (INPUT_MODES[p2ModeIdx].p1Only || INPUT_MODES[p2ModeIdx].p2Disabled);
       updateModeSelection(2, p2ModeIdx, p2ProviderIdx);
       saveModes();
       e.preventDefault();
