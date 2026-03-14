@@ -1,10 +1,11 @@
 """OAuth2/OIDC authentication module for id.dx.deepgram.com.
 
 Handles token exchange, refresh, and userinfo fetching.
+Supports both confidential clients (client_secret) and public clients (PKCE).
 Configuration via environment variables:
   OIDC_ISSUER        — OIDC issuer URL (default: https://id.dx.deepgram.com)
   OIDC_CLIENT_ID     — OAuth2 client ID
-  OIDC_CLIENT_SECRET — OAuth2 client secret
+  OIDC_CLIENT_SECRET — OAuth2 client secret (optional for PKCE public clients)
 """
 
 from __future__ import annotations
@@ -43,7 +44,7 @@ class OIDCConfig:
         )
         token_endpoint = os.environ.get(
             "OIDC_TOKEN_ENDPOINT",
-            f"{issuer}/oauth/token",
+            f"{issuer}/token",
         )
         userinfo_endpoint = os.environ.get(
             "OIDC_USERINFO_ENDPOINT",
@@ -89,22 +90,32 @@ def decode_id_token_payload(id_token: str) -> dict:
 
 
 async def exchange_code(
-    config: OIDCConfig, code: str, redirect_uri: str
+    config: OIDCConfig,
+    code: str,
+    redirect_uri: str,
+    code_verifier: str = "",
 ) -> dict:
     """Exchange an authorization code for tokens.
 
+    Supports both confidential (client_secret) and public (PKCE code_verifier) flows.
     Returns the raw token response dict (access_token, id_token, refresh_token, etc.)
     """
+    data: dict[str, str] = {
+        "grant_type": "authorization_code",
+        "code": code,
+        "redirect_uri": redirect_uri,
+        "client_id": config.client_id,
+    }
+    # PKCE public client: send code_verifier instead of client_secret
+    if code_verifier:
+        data["code_verifier"] = code_verifier
+    elif config.client_secret:
+        data["client_secret"] = config.client_secret
+
     async with httpx.AsyncClient(timeout=10) as client:
         resp = await client.post(
             config.token_endpoint,
-            data={
-                "grant_type": "authorization_code",
-                "code": code,
-                "redirect_uri": redirect_uri,
-                "client_id": config.client_id,
-                "client_secret": config.client_secret,
-            },
+            data=data,
             headers={"Content-Type": "application/x-www-form-urlencoded"},
         )
 
@@ -119,15 +130,18 @@ async def refresh_tokens(config: OIDCConfig, refresh_token: str) -> dict:
 
     Returns the raw token response dict.
     """
+    data: dict[str, str] = {
+        "grant_type": "refresh_token",
+        "refresh_token": refresh_token,
+        "client_id": config.client_id,
+    }
+    if config.client_secret:
+        data["client_secret"] = config.client_secret
+
     async with httpx.AsyncClient(timeout=10) as client:
         resp = await client.post(
             config.token_endpoint,
-            data={
-                "grant_type": "refresh_token",
-                "refresh_token": refresh_token,
-                "client_id": config.client_id,
-                "client_secret": config.client_secret,
-            },
+            data=data,
             headers={"Content-Type": "application/x-www-form-urlencoded"},
         )
 

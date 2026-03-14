@@ -1,8 +1,9 @@
 /**
- * OAuth2/OIDC authentication module.
+ * OAuth2/OIDC authentication module with PKCE support.
  *
  * Manages login flow, token storage (localStorage), and user state.
  * Works with id.dx.deepgram.com as the identity provider.
+ * Uses Authorization Code + PKCE (S256) for public client flow.
  */
 
 const STORAGE_KEYS = {
@@ -43,8 +44,10 @@ export async function isAuthConfigured() {
 
 /**
  * Initiate the login flow by redirecting to the OIDC provider.
+ * Uses PKCE (S256) for secure public client auth.
+ * @param {string} [returnPath] — optional path to return to after login (stored in sessionStorage)
  */
-export async function login() {
+export async function login(returnPath) {
   const config = await getAuthConfig();
   if (!config.configured) {
     console.warn('[auth] OIDC not configured');
@@ -55,19 +58,31 @@ export async function login() {
   const state = crypto.randomUUID();
   sessionStorage.setItem('sf_auth_state', state);
 
+  // PKCE: generate code_verifier and code_challenge
+  const codeVerifier = _generateCodeVerifier();
+  sessionStorage.setItem('sf_auth_code_verifier', codeVerifier);
+  const codeChallenge = await _computeCodeChallenge(codeVerifier);
+
+  // Store return path so we can redirect back after callback
+  if (returnPath) {
+    sessionStorage.setItem('sf_auth_return_path', returnPath);
+  }
+
   const params = new URLSearchParams({
     response_type: 'code',
     client_id: config.clientId,
     redirect_uri: config.redirectUri,
     scope: config.scopes,
     state,
+    code_challenge: codeChallenge,
+    code_challenge_method: 'S256',
   });
 
   window.location.href = `${config.authorizationEndpoint}?${params}`;
 }
 
 /**
- * Handle the OAuth callback — exchange the code for tokens.
+ * Handle the OAuth callback — exchange the code for tokens using PKCE.
  * Call this when the router detects /auth/callback with a ?code= param.
  * @returns {Promise<object|null>} User info on success, null on failure.
  */
@@ -95,12 +110,21 @@ export async function handleCallback() {
   }
   sessionStorage.removeItem('sf_auth_state');
 
+  // Retrieve PKCE code_verifier
+  const codeVerifier = sessionStorage.getItem('sf_auth_code_verifier') || '';
+  sessionStorage.removeItem('sf_auth_code_verifier');
+
   try {
     const config = await getAuthConfig();
+    const body = { code, redirect_uri: config.redirectUri };
+    if (codeVerifier) {
+      body.code_verifier = codeVerifier;
+    }
+
     const resp = await fetch('/api/auth/token', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ code, redirect_uri: config.redirectUri }),
+      body: JSON.stringify(body),
     });
 
     if (!resp.ok) {
@@ -112,7 +136,9 @@ export async function handleCallback() {
     _storeTokens(data);
 
     // Clean the URL (remove ?code=&state= params)
-    window.history.replaceState({}, '', '/');
+    const returnPath = sessionStorage.getItem('sf_auth_return_path') || '/';
+    sessionStorage.removeItem('sf_auth_return_path');
+    window.history.replaceState({}, '', returnPath);
 
     return data.user || null;
   } catch (err) {
@@ -228,4 +254,31 @@ function _storeTokens(data) {
   if (data.user && data.user.id) {
     localStorage.setItem(STORAGE_KEYS.user, JSON.stringify(data.user));
   }
+}
+
+/**
+ * Generate a random PKCE code_verifier (64 hex characters).
+ * @returns {string}
+ */
+export function _generateCodeVerifier() {
+  const array = new Uint8Array(32);
+  crypto.getRandomValues(array);
+  return Array.from(array, b => b.toString(16).padStart(2, '0')).join('');
+}
+
+/**
+ * Compute the PKCE code_challenge from a code_verifier using S256.
+ * code_challenge = base64url(SHA-256(code_verifier))
+ * @param {string} verifier
+ * @returns {Promise<string>}
+ */
+export async function _computeCodeChallenge(verifier) {
+  const digest = await crypto.subtle.digest(
+    'SHA-256',
+    new TextEncoder().encode(verifier),
+  );
+  return btoa(String.fromCharCode(...new Uint8Array(digest)))
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '');
 }

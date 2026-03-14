@@ -15,6 +15,8 @@ after each iteration and it's included in prompts for context.
 - **MP controller validation**: `VALID_MP_CONTROLLERS` (server.py) is a strict subset of `VALID_CONTROLLERS` — use it in MP endpoints (`room_controller`). Matchmaking already rejects bot controllers via `controller_to_category() → None`.
 - **Server-authoritative timer pattern**: Use `asyncio.create_task()` with module-level `dict[str, asyncio.Task]` for per-room async timers. Timer tasks check room state on wake (idempotent) and clean up their own dict entry. Cancel via `task.cancel()` and `dict.pop()`. Used for controller wait/forfeit timer.
 - **Room state transitions**: `selecting → finished` is valid (controller wait forfeit). Existing: `waiting → selecting → fighting → finished`.
+- **PKCE auth mocking pattern**: When testing `exchange_code` directly, use `MagicMock` for the httpx response (`.json()` is sync) but `AsyncMock` for the client itself (`.post()` is async). The `@patch("auth.httpx.AsyncClient")` + `@pytest.mark.asyncio` combo is required.
+- **Client-side route pattern**: For post-auth redirects, add server route serving `index.html` (e.g. `/multiplayer`), register in `router.js` `parseRoute()`, and handle in `initAuth`'s route dispatch.
 
 ---
 
@@ -142,5 +144,32 @@ after each iteration and it's included in prompts for context.
   - Using a separate boolean (`p1LlmThinking`) rather than reusing the timed toast for "thinking" state is cleaner — the toast timer would need constant refreshing, while the boolean is just set/cleared
   - Button text restoration in `finally` blocks ensures consistent UI state even on error paths — important for the join button where `disabled` state also depends on input length
   - All quality gates: 440 Python tests, ruff, mypy, 119 JS tests pass
+---
+
+## 2026-03-14 - stick-fighter-j3r.10
+- Implemented mandatory PKCE authentication for multiplayer via id.dx.deepgram.com
+- Updated auth.py: `exchange_code()` accepts optional `code_verifier`, `client_secret` only sent when non-empty, default token endpoint changed from `/oauth/token` to `/token` per dx-id discovery
+- Updated server.py: `/api/auth/config` now returns `tokenEndpoint`, `/api/auth/token` forwards `code_verifier`, added `/multiplayer` route for post-auth redirect
+- Updated src/auth.js: PKCE flow with `_generateCodeVerifier()` (64-char hex), `_computeCodeChallenge()` (SHA-256 + base64url), verifier stored in sessionStorage, `login()` accepts `returnPath` for post-auth navigation
+- Updated src/main.js: multiplayer button checks `isLoggedIn()`, redirects to OIDC provider with `login('/multiplayer')` if not authenticated, `initAuth` handles `/multiplayer` return path
+- Updated src/router.js: added `/multiplayer` route type
+- Registered `stick-fighter` OIDC client in dx-id seed data (client_id: `stick-fighter`, redirect_uris: localhost:3000 + fight.dx.deepgram.com, token_endpoint_auth_method: `none`)
+- `OIDC_CLIENT_SECRET` is now optional — not needed for PKCE public clients
+- Single-player mode remains accessible without authentication
+- Files changed:
+  - `auth.py` — PKCE code_verifier support, optional client_secret, /token default
+  - `server.py` — tokenEndpoint in config, code_verifier forwarding, /multiplayer route
+  - `src/auth.js` — Full rewrite with PKCE verifier/challenge generation, returnPath support
+  - `src/main.js` — Auth gate on multiplayer button, /multiplayer route handling in initAuth
+  - `src/router.js` — Added /multiplayer route detection
+  - `tests/test_auth.py` — 32 tests (5 new: code_verifier forwarding, PKCE exchange, secret-only exchange, multiplayer route, token endpoint default fix)
+  - `tests/auth.test.js` — 12 tests (7 new: multiplayer route, PKCE verifier generation, challenge computation)
+  - `dx-id/apps/id/src/db/seed.ts` — Added stick-fighter OIDC client registration
+- **Learnings:**
+  - httpx `resp.json()` is synchronous — use `MagicMock` not `AsyncMock` for response objects when testing `exchange_code` directly
+  - PKCE `code_challenge` requires base64url encoding: replace `+` with `-`, `/` with `_`, strip `=` padding — standard base64 won't work
+  - `history.replaceState` changes the URL without reloading, so post-callback routing must check `window.location.pathname` and dispatch to the right screen
+  - The `returnPath` pattern (stored in sessionStorage before redirect, read after callback) is cleaner than query params for post-auth navigation since it survives the OIDC redirect chain
+  - All quality gates: 444 Python tests, ruff, mypy, 126 JS tests pass
 ---
 

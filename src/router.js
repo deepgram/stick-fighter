@@ -17,5 +17,8 @@ export function parseRoute(pathname) {
   if (pathname === '/leaderboard') {
     return { type: 'leaderboard' };
   }
+  if (pathname === '/multiplayer') {
+    return { type: 'multiplayer' };
+  }
   return { type: 'home' };
 }

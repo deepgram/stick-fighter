@@ -182,7 +182,19 @@ async function startFight() {
 // ─────────────────────────────────────────────
 // Landing page click handlers
 // ─────────────────────────────────────────────
-document.getElementById('btn-multiplayer').addEventListener('click', () => showScreen('multiplayer'));
+document.getElementById('btn-multiplayer').addEventListener('click', async () => {
+  // Multiplayer requires authentication
+  if (!isLoggedIn()) {
+    const configured = await isAuthConfigured();
+    if (configured) {
+      // Store intent to return to multiplayer after login
+      login('/multiplayer');
+      return;
+    }
+    // If OIDC is not configured, allow through (dev mode)
+  }
+  showScreen('multiplayer');
+});
 document.getElementById('btn-singleplayer').addEventListener('click', () => showCharacterSelect());
 
 // Multiplayer menu
@@ -1591,7 +1603,13 @@ async function initAuth() {
       console.log('[auth] Logged in as:', user.name);
     }
     updateAuthUI();
-    showScreen('landing');
+    // Route to the intended destination after login (e.g. /multiplayer)
+    const returnPath = window.location.pathname;
+    if (returnPath === '/multiplayer') {
+      showScreen('multiplayer');
+    } else {
+      showScreen('landing');
+    }
     return true; // Signal that we handled the route
   }
 
@@ -1626,6 +1644,10 @@ initAuth().then(handledRoute => {
   } else if (route.type === 'leaderboard') {
     showScreen('leaderboard');
     loadLeaderboard(lbCategory);
+  } else if (route.type === 'multiplayer') {
+    // Direct navigation to /multiplayer (e.g. after auth redirect)
+    showScreen('multiplayer');
+    window.history.replaceState({}, '', '/');
   } else if (route.type !== 'auth-callback') {
     showScreen('landing');
   }

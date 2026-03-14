@@ -3,10 +3,10 @@
   "sessionId": "e943ccda-cca9-492d-8e6d-a07660cc75be",
   "status": "running",
   "startedAt": "2026-03-14T11:01:24.391Z",
-  "updatedAt": "2026-03-14T11:46:16.100Z",
-  "currentIteration": 6,
+  "updatedAt": "2026-03-14T11:55:25.457Z",
+  "currentIteration": 7,
   "maxIterations": 0,
-  "tasksCompleted": 6,
+  "tasksCompleted": 7,
   "isPaused": false,
   "agentPlugin": "claude",
   "trackerState": {
@@ -59,8 +59,8 @@
       {
         "id": "stick-fighter-j3r.8",
         "title": "US-006: Add status feedback for async operations",
-        "status": "open",
-        "completedInSession": false
+        "status": "completed",
+        "completedInSession": true
       },
       {
         "id": "stick-fighter-j3r.7",
@@ -130,6 +130,16 @@
       "durationMs": 692523,
       "startedAt": "2026-03-14T11:27:59.354Z",
       "endedAt": "2026-03-14T11:39:31.877Z"
+    },
+    {
+      "iteration": 7,
+      "status": "completed",
+      "taskId": "stick-fighter-j3r.8",
+      "taskTitle": "US-006: Add status feedback for async operations",
+      "taskCompleted": true,
+      "durationMs": 402367,
+      "startedAt": "2026-03-14T11:39:33.551Z",
+      "endedAt": "2026-03-14T11:46:15.918Z"
     }
   ],
   "skippedTaskIds": [],

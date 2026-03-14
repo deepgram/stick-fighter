@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import base64
 import json
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from litestar.testing import TestClient
 
 import server
@@ -24,7 +25,7 @@ class TestOIDCConfig:
         assert config.client_id == ""
         assert config.client_secret == ""
         assert config.authorization_endpoint == "https://id.dx.deepgram.com/authorize"
-        assert config.token_endpoint == "https://id.dx.deepgram.com/oauth/token"
+        assert config.token_endpoint == "https://id.dx.deepgram.com/token"
         assert config.userinfo_endpoint == "https://id.dx.deepgram.com/userinfo"
 
     def test_from_env_custom(self) -> None:
@@ -139,7 +140,7 @@ class TestAuthConfig:
                 client_id="test-client-id",
                 client_secret="test-secret",
                 authorization_endpoint="https://id.dx.deepgram.com/authorize",
-                token_endpoint="https://id.dx.deepgram.com/oauth/token",
+                token_endpoint="https://id.dx.deepgram.com/token",
                 userinfo_endpoint="https://id.dx.deepgram.com/userinfo",
             )
             resp = client.get("/api/auth/config")
@@ -147,6 +148,7 @@ class TestAuthConfig:
             assert data["configured"] is True
             assert data["clientId"] == "test-client-id"
             assert data["authorizationEndpoint"] == "https://id.dx.deepgram.com/authorize"
+            assert data["tokenEndpoint"] == "https://id.dx.deepgram.com/token"
             assert data["scopes"] == "openid profile email"
             assert "/auth/callback" in data["redirectUri"]
             server.oidc_config = None
@@ -229,6 +231,107 @@ class TestAuthToken:
             )
             assert resp.status_code == 502
             server.oidc_config = None
+
+    @patch("server.exchange_code", new_callable=AsyncMock)
+    def test_token_exchange_forwards_code_verifier(self, mock_exchange) -> None:
+        id_token = _make_jwt({"sub": "u1", "name": "Alice", "email": "a@b.com"})
+        mock_exchange.return_value = {
+            "access_token": "at-pkce",
+            "id_token": id_token,
+            "refresh_token": "rt-pkce",
+            "expires_in": 3600,
+        }
+        with TestClient(app=app) as client:
+            server.oidc_config = self._get_test_config()
+            resp = client.post(
+                "/api/auth/token",
+                content=json.dumps({
+                    "code": "test-code",
+                    "code_verifier": "abc123verifier",
+                }),
+                headers={"Content-Type": "application/json"},
+            )
+            assert resp.status_code == 201
+            # Verify code_verifier was forwarded to exchange_code
+            _, kwargs = mock_exchange.call_args
+            assert kwargs.get("code_verifier") == "abc123verifier"
+            server.oidc_config = None
+
+
+# ─── Auth PKCE (exchange_code) ──────────────
+
+
+class TestExchangeCodePKCE:
+    """Test that exchange_code handles PKCE code_verifier and optional client_secret."""
+
+    def _get_pkce_config(self) -> OIDCConfig:
+        """Config without client_secret (public PKCE client)."""
+        return OIDCConfig(
+            issuer="https://id.dx.deepgram.com",
+            client_id="stick-fighter",
+            client_secret="",
+            authorization_endpoint="https://id.dx.deepgram.com/authorize",
+            token_endpoint="https://id.dx.deepgram.com/token",
+            userinfo_endpoint="https://id.dx.deepgram.com/userinfo",
+        )
+
+    @pytest.mark.asyncio
+    @patch("auth.httpx.AsyncClient")
+    async def test_pkce_sends_code_verifier_not_secret(self, mock_client_cls) -> None:
+        """When code_verifier is provided, it should be sent instead of client_secret."""
+        import auth
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {"access_token": "at-1", "id_token": "", "expires_in": 3600}
+
+        mock_client = AsyncMock()
+        mock_client.post.return_value = mock_resp
+        mock_client.__aenter__.return_value = mock_client
+        mock_client.__aexit__.return_value = False
+        mock_client_cls.return_value = mock_client
+
+        config = self._get_pkce_config()
+        result = await auth.exchange_code(config, "code-123", "http://localhost/cb", code_verifier="my-verifier")
+
+        assert result["access_token"] == "at-1"
+        # Verify the POST data included code_verifier and NOT client_secret
+        call_kwargs = mock_client.post.call_args
+        sent_data = call_kwargs.kwargs.get("data", call_kwargs[1].get("data", {}))
+        assert sent_data["code_verifier"] == "my-verifier"
+        assert "client_secret" not in sent_data
+
+    @pytest.mark.asyncio
+    @patch("auth.httpx.AsyncClient")
+    async def test_secret_sent_when_no_verifier(self, mock_client_cls) -> None:
+        """When no code_verifier is provided, client_secret should be sent."""
+        import auth
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {"access_token": "at-2"}
+
+        mock_client = AsyncMock()
+        mock_client.post.return_value = mock_resp
+        mock_client.__aenter__.return_value = mock_client
+        mock_client.__aexit__.return_value = False
+        mock_client_cls.return_value = mock_client
+
+        config = OIDCConfig(
+            issuer="https://id.dx.deepgram.com",
+            client_id="test",
+            client_secret="my-secret",
+            authorization_endpoint="",
+            token_endpoint="https://id.dx.deepgram.com/token",
+            userinfo_endpoint="",
+        )
+        result = await auth.exchange_code(config, "code-123", "http://localhost/cb")
+
+        assert result["access_token"] == "at-2"
+        call_kwargs = mock_client.post.call_args
+        sent_data = call_kwargs.kwargs.get("data", call_kwargs[1].get("data", {}))
+        assert sent_data["client_secret"] == "my-secret"
+        assert "code_verifier" not in sent_data
 
 
 # ─── Auth refresh endpoint ───────────────────
@@ -370,6 +473,18 @@ class TestAuthCallbackRoute:
     def test_callback_serves_html(self) -> None:
         with TestClient(app=app) as client:
             resp = client.get("/auth/callback?code=abc&state=xyz")
+            assert resp.status_code == 200
+            assert "text/html" in resp.headers["content-type"]
+            assert "STICK FIGHTER" in resp.text
+
+
+# ─── Multiplayer route ──────────────────────
+
+
+class TestMultiplayerRoute:
+    def test_multiplayer_serves_html(self) -> None:
+        with TestClient(app=app) as client:
+            resp = client.get("/multiplayer")
             assert resp.status_code == 200
             assert "text/html" in resp.headers["content-type"]
             assert "STICK FIGHTER" in resp.text

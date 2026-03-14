@@ -1457,6 +1457,13 @@ async def auth_callback_route() -> Response:
     return Response(content=html, media_type="text/html")
 
 
+@get("/multiplayer")
+async def multiplayer_route() -> Response:
+    """Serve the game page for the /multiplayer client-side route (post-auth redirect)."""
+    html = (ROOT / "index.html").read_text()
+    return Response(content=html, media_type="text/html")
+
+
 @get("/api/auth/config")
 async def auth_config(request: Request) -> dict[str, Any]:
     """Return OIDC configuration for the frontend to build the login URL.
@@ -1473,6 +1480,7 @@ async def auth_config(request: Request) -> dict[str, Any]:
         "configured": True,
         "clientId": oidc_config.client_id,
         "authorizationEndpoint": oidc_config.authorization_endpoint,
+        "tokenEndpoint": oidc_config.token_endpoint,
         "redirectUri": redirect_uri,
         "scopes": oidc_config.scopes,
     }
@@ -1497,7 +1505,8 @@ async def auth_token(request: Request, data: dict[str, str]) -> dict[str, Any]:
     base = str(request.base_url).rstrip("/")
     redirect_uri = data.get("redirect_uri", os.environ.get("OIDC_REDIRECT_URI", f"{base}/auth/callback"))
 
-    result = await exchange_code(oidc_config, code, redirect_uri)
+    code_verifier = data.get("code_verifier", "")
+    result = await exchange_code(oidc_config, code, redirect_uri, code_verifier=code_verifier)
 
     if "error" in result:
         print(f"[auth] Token exchange failed: {result}")
@@ -1752,6 +1761,7 @@ app = Litestar(
         room_route,
         leaderboard_page,
         auth_callback_route,
+        multiplayer_route,
         auth_config,
         auth_token,
         auth_refresh,
